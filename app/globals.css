@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", "Noto Sans", sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Times New Roman", serif;
+  --background: 220 33% 6%;
+  --foreground: 44 24% 92%;
+  --panel: 220 28% 11%;
+  --panel-alt: 219 24% 16%;
+  --border: 35 24% 27%;
+  --input: 220 20% 15%;
+  --ring: 43 75% 61%;
+  --primary: 43 75% 61%;
+  --primary-foreground: 220 35% 7%;
+  --secondary: 164 63% 39%;
+  --secondary-foreground: 0 0% 100%;
+  --accent: 205 91% 67%;
+  --accent-foreground: 220 35% 10%;
+  --muted: 219 21% 18%;
+  --muted-foreground: 40 14% 73%;
+  --success: 157 56% 37%;
+  --success-foreground: 0 0% 100%;
+  --warning: 35 82% 57%;
+  --warning-foreground: 220 35% 8%;
+  --danger: 357 79% 60%;
+  --danger-foreground: 0 0% 100%;
+}
+
+* {
+  @apply border-border;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-background text-foreground font-sans antialiased;
+  background-image:
+    radial-gradient(circle at 20% 0%, rgba(232, 191, 94, 0.17), transparent 30%),
+    radial-gradient(circle at 80% 10%, rgba(44, 116, 255, 0.14), transparent 26%),
+    radial-gradient(circle at 50% 100%, rgba(23, 131, 113, 0.18), transparent 35%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(232, 191, 94, 0.22);
+  color: rgb(250, 245, 232);
+}
+
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .page-wrap {
+    @apply relative min-h-screen overflow-x-hidden;
+  }
+
+  .page-wrap::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.6), transparent);
+    opacity: 0.35;
+  }
+
+  .shell-panel {
+    @apply rounded-3xl border border-white/10 bg-panel/75 shadow-soft backdrop-blur-xl;
+  }
+
+  .subtle-panel {
+    @apply rounded-[1.5rem] border border-white/10 bg-panelAlt/70 backdrop-blur;
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-primary;
+  }
+
+  .metric {
+    @apply rounded-[1.6rem] border border-white/10 bg-white/5 p-5 shadow-soft;
+  }
+
+  .data-chip {
+    @apply inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm text-muted-foreground;
+  }
+
+  .frost-divider {
+    @apply h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent;
+  }
+}

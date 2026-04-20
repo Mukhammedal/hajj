@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PilgrimStatus {
+  new
+  docs_pending
+  docs_complete
+  payment_pending
+  payment_partial
+  ready
+  departed
+}
+
+enum DocumentType {
+  passport
+  medical_certificate
+  photo
+  questionnaire
+  vaccination
+}
+
+enum DepartureCity {
+  Almaty
+  Astana
+  Shymkent
+  Turkestan
+  Aktau
+}
+
+enum GroupStatus {
+  forming
+  full
+  departed
+  completed
+}
+
+enum PaymentMethod {
+  kaspi
+  halyk
+  cash
+  transfer
+}
+
+enum PaymentStatus {
+  pending
+  partial
+  paid
+}
+
+enum NotificationChannel {
+  whatsapp
+  sms
+  email
+  in_app
+}
+
+enum NotificationType {
+  reminder_docs
+  reminder_payment
+  reminder_flight
+  welcome
+  checklist
+}
+
+enum NotificationStatus {
+  queued
+  sent
+  failed
+}
+
+enum ChecklistCategory {
+  documents
+  health
+  clothing
+  finance
+  spiritual
+}
+
+model Operator {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String           @map("user_id") @db.Uuid
+  companyName   String           @map("company_name")
+  licenseNumber String           @unique @map("license_number")
+  licenseExpiry DateTime         @map("license_expiry") @db.Date
+  isVerified    Boolean          @default(false) @map("is_verified")
+  rating        Decimal          @default(0) @db.Decimal(2, 1)
+  totalReviews  Int              @default(0) @map("total_reviews")
+  phone         String?
+  address       String?
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  pilgrimProfiles PilgrimProfile[]
+  groups        Group[]
+  payments      Payment[]
+  reviews       OperatorReview[]
+  notifications Notification[]
+
+  @@index([userId])
+  @@map("operators")
+}
+
+model PilgrimProfile {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  operatorId  String           @map("operator_id") @db.Uuid
+  fullName    String           @map("full_name")
+  iin         String           @unique
+  phone       String?
+  dateOfBirth DateTime?        @map("date_of_birth") @db.Date
+  gender      String?
+  status      PilgrimStatus
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  operator    Operator         @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  documents   Document[]
+  groups      PilgrimGroup[]
+  payments    Payment[]
+  reviews     OperatorReview[]
+  notifications Notification[]
+  checklistItems ChecklistItem[]
+
+  @@index([operatorId])
+  @@index([userId])
+  @@map("pilgrim_profiles")
+}
+
+model Document {
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pilgrimId  String         @map("pilgrim_id") @db.Uuid
+  type       DocumentType
+  fileUrl    String         @map("file_url")
+  fileName   String         @map("file_name")
+  isVerified Boolean        @default(false) @map("is_verified")
+  uploadedAt DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  pilgrim    PilgrimProfile @relation(fields: [pilgrimId], references: [id], onDelete: Cascade)
+
+  @@unique([pilgrimId, type])
+  @@index([pilgrimId])
+  @@map("documents")
+}
+
+model Group {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  operatorId    String         @map("operator_id") @db.Uuid
+  name          String
+  flightDate    DateTime       @map("flight_date") @db.Date
+  returnDate    DateTime       @map("return_date") @db.Date
+  hotelMecca    String?        @map("hotel_mecca")
+  hotelMedina   String?        @map("hotel_medina")
+  quotaTotal    Int            @map("quota_total")
+  quotaFilled   Int            @default(0) @map("quota_filled")
+  guideName     String?        @map("guide_name")
+  guidePhone    String?        @map("guide_phone")
+  departureCity DepartureCity  @map("departure_city")
+  status        GroupStatus
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  operator      Operator       @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  pilgrims      PilgrimGroup[]
+
+  @@index([operatorId])
+  @@map("groups")
+}
+
+model PilgrimGroup {
+  pilgrimId String         @map("pilgrim_id") @db.Uuid
+  groupId   String         @map("group_id") @db.Uuid
+  joinedAt  DateTime       @default(now()) @map("joined_at") @db.Timestamptz(6)
+  pilgrim   PilgrimProfile @relation(fields: [pilgrimId], references: [id], onDelete: Cascade)
+  group     Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([pilgrimId, groupId])
+  @@index([groupId])
+  @@map("pilgrim_groups")
+}
+
+model Payment {
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pilgrimId           String         @map("pilgrim_id") @db.Uuid
+  operatorId          String         @map("operator_id") @db.Uuid
+  totalAmount         Decimal        @map("total_amount") @db.Decimal(12, 2)
+  paidAmount          Decimal        @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  paymentMethod       PaymentMethod  @map("payment_method")
+  installmentPlan     Boolean        @default(false) @map("installment_plan")
+  installmentMonths   Int?           @map("installment_months")
+  status              PaymentStatus
+  contractUrl         String?        @map("contract_url")
+  qrCode              String?        @unique @map("qr_code")
+  contractGeneratedAt DateTime?      @map("contract_generated_at") @db.Timestamptz(6)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  pilgrim             PilgrimProfile @relation(fields: [pilgrimId], references: [id], onDelete: Cascade)
+  operator            Operator       @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([pilgrimId])
+  @@index([operatorId])
+  @@map("payments")
+}
+
+model OperatorReview {
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  operatorId String         @map("operator_id") @db.Uuid
+  pilgrimId  String         @map("pilgrim_id") @db.Uuid
+  rating     Int
+  comment    String?
+  isVisible  Boolean        @default(true) @map("is_visible")
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  operator   Operator       @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  pilgrim    PilgrimProfile @relation(fields: [pilgrimId], references: [id], onDelete: Cascade)
+
+  @@index([operatorId])
+  @@index([pilgrimId])
+  @@map("operator_reviews")
+}
+
+model Notification {
+  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pilgrimId   String              @map("pilgrim_id") @db.Uuid
+  operatorId  String              @map("operator_id") @db.Uuid
+  channel     NotificationChannel
+  type        NotificationType
+  message     String
+  status      NotificationStatus
+  scheduledAt DateTime            @map("scheduled_at") @db.Timestamptz(6)
+  sentAt      DateTime?           @map("sent_at") @db.Timestamptz(6)
+  pilgrim     PilgrimProfile      @relation(fields: [pilgrimId], references: [id], onDelete: Cascade)
+  operator    Operator            @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([pilgrimId])
+  @@index([operatorId])
+  @@map("notifications")
+}
+
+model ChecklistItem {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pilgrimId String            @map("pilgrim_id") @db.Uuid
+  itemName  String            @map("item_name")
+  category  ChecklistCategory
+  isChecked Boolean           @default(false) @map("is_checked")
+  pilgrim   PilgrimProfile    @relation(fields: [pilgrimId], references: [id], onDelete: Cascade)
+
+  @@index([pilgrimId])
+  @@map("checklist_items")
+}
