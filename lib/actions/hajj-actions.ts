@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { initialActionState, type ActionState } from "@/lib/actions/action-state";
+import type { ActionState } from "@/lib/actions/action-state";
 import { generateContractForPayment } from "@/lib/contracts";
 import { isSupabaseConfigured } from "@/lib/env";
+import { formatDate } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -15,12 +16,6 @@ import {
   reminderSchema,
 } from "@/lib/validation";
 import { isWhapiConfigured, normalizeWhatsAppRecipient, sendWhapiTextMessage } from "@/lib/whatsapp";
-
-const ruDateFormatter = new Intl.DateTimeFormat("ru-RU", {
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-});
 
 function fromZodError(error: z.ZodError): ActionState {
   return {
@@ -624,7 +619,7 @@ export async function sendFlightBroadcastAction(
     };
   }
 
-  const flightDate = ruDateFormatter.format(new Date(group.flight_date));
+  const flightDate = formatDate(group.flight_date);
   const guideLine = [group.guide_name, group.guide_phone].filter(Boolean).join(", ");
   const message = [
     `Напоминание перед вылетом по группе «${group.name}».`,
@@ -755,5 +750,3 @@ export async function generateContractAction(paymentId: string): Promise<void> {
   await generateContractForPayment(supabase, paymentId);
   revalidatePaymentViews(paymentRow.pilgrim_id);
 }
-
-export { initialActionState };

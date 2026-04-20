@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 
-import { initialActionState, type ActionState } from "@/lib/actions/action-state";
+import type { ActionState } from "@/lib/actions/action-state";
 import { routeForRole } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
@@ -64,5 +64,3 @@ export async function signOutAction(): Promise<void> {
   await supabase.auth.signOut();
   redirect("/login");
 }
-
-export { initialActionState };

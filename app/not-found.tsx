@@ -1,19 +1,48 @@
 import Link from "next/link";
 
-import { Button } from "@/components/ui/button";
-
 export default function NotFound() {
   return (
-    <div className="page-wrap flex min-h-screen items-center justify-center px-4">
-      <div className="shell-panel max-w-xl p-8 text-center">
-        <p className="text-sm uppercase tracking-[0.24em] text-muted-foreground">404</p>
-        <h1 className="mt-4 text-5xl">Страница не найдена</h1>
-        <p className="mt-4 text-sm leading-7 text-muted-foreground">
-          Возможно, маршрут ещё не связан с данными или ссылка устарела. Вернитесь на главную и продолжите навигацию оттуда.
+    <div
+      style={{
+        alignItems: "center",
+        background: "var(--cream)",
+        display: "flex",
+        justifyContent: "center",
+        minHeight: "100vh",
+        padding: "32px",
+      }}
+    >
+      <div
+        style={{
+          background: "var(--paper)",
+          border: "1px solid var(--line)",
+          borderRadius: "var(--radius)",
+          maxWidth: 720,
+          padding: "48px 42px",
+          width: "100%",
+        }}
+      >
+        <div style={{ color: "var(--muted)", fontSize: 11, fontWeight: 700, letterSpacing: 1.8, marginBottom: 14, textTransform: "uppercase" }}>
+          404 · HajjCRM
+        </div>
+        <h1 style={{ fontFamily: "var(--f-display)", fontSize: 64, lineHeight: 1.02, margin: 0 }}>
+          Страница <em>не найдена</em>
+        </h1>
+        <p style={{ color: "var(--muted)", fontSize: 14, lineHeight: 1.9, margin: "16px 0 28px", maxWidth: 560 }}>
+          Возможно, ссылка устарела, slug изменился или маршрут ещё не связан с данными. Вернитесь в публичную часть, кабинет
+          паломника или CRM и продолжите навигацию оттуда.
         </p>
-        <Link href="/" className="mt-6 inline-block">
-          <Button>На главную</Button>
-        </Link>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Link className="btn btn-dark btn-sm" href="/">
+            На главную
+          </Link>
+          <Link className="btn btn-ghost btn-sm" href="/crm/dashboard">
+            В CRM
+          </Link>
+          <Link className="btn btn-ghost btn-sm" href="/cabinet/dashboard">
+            В кабинет
+          </Link>
+        </div>
       </div>
     </div>
   );

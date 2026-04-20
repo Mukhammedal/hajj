@@ -13,7 +13,19 @@ export function formatKzt(amount: number) {
 }
 
 export function formatDate(date: string) {
-  return ruDateFormatter.format(new Date(date));
+  const value = new Date(date);
+
+  if (Number.isNaN(value.getTime())) {
+    return date;
+  }
+
+  return ruDateFormatter
+    .formatToParts(value)
+    .filter((part) => !(part.type === "literal" && part.value.trim() === "г."))
+    .map((part) => part.value)
+    .join("")
+    .replace(/\s+г\.?$/, "")
+    .trim();
 }
 
 export function formatPercent(value: number) {
@@ -27,4 +39,14 @@ export function initials(fullName: string) {
     .map((part) => part[0]?.toUpperCase())
     .slice(0, 2)
     .join("");
+}
+
+export function maskIin(iin: string) {
+  const digits = iin.replace(/\D/g, "");
+
+  if (digits.length < 9) {
+    return iin;
+  }
+
+  return `${digits.slice(0, 6)}•••${digits.slice(-3)}`;
 }

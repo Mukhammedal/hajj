@@ -1,148 +1,256 @@
-import { Download, Filter, Layers3, UserPlus2 } from "lucide-react";
+import Link from "next/link";
 
 import { GroupAssignmentForm } from "@/components/crm/group-assignment-form";
 import { PilgrimCreateForm } from "@/components/crm/pilgrim-create-form";
-import { PilgrimTable } from "@/components/crm/pilgrim-table";
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { CrmTopbar } from "@/components/crm/crm-topbar";
+import {
+  type CrmBundleLike,
+  buildCrmPilgrimRows,
+  getPilgrimRouteId,
+  getPilgrimStatusLabel,
+  getProgressTone,
+} from "@/lib/design-crm";
 import { loadCrmBundle } from "@/lib/data/hajj-loaders";
 import { formatPercent } from "@/lib/format";
-import { cn } from "@/lib/utils";
-import type { DocumentRecord } from "@/types/domain";
 
-const filters = ["Статус: все", "Группа: все", "Готовность > 70%", "Нужна оплата"];
+type SearchParams = Record<string, string | string[] | undefined>;
+type FilterKey = "all" | "debt" | "departed" | "new" | "no_docs" | "ready";
 
-export default async function CrmPilgrimsPage() {
+function toValue(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function matchesFilter(row: ReturnType<typeof buildCrmPilgrimRows>[number], status: FilterKey) {
+  if (status === "new") {
+    return row.pilgrim.status === "new";
+  }
+
+  if (status === "no_docs") {
+    return row.docsCount < 5;
+  }
+
+  if (status === "debt") {
+    return row.paymentPercent < 100;
+  }
+
+  if (status === "ready") {
+    return row.readiness.readinessPercent >= 90 || row.pilgrim.status === "ready";
+  }
+
+  if (status === "departed") {
+    return row.pilgrim.status === "departed";
+  }
+
+  return true;
+}
+
+export default async function CrmPilgrimsPage({ searchParams }: { searchParams?: SearchParams }) {
   const crm = await loadCrmBundle();
 
-  if (!crm) {
+  if (!crm || !crm.operator) {
     return null;
   }
 
-  const readinessMap = new Map(crm.readiness.map((item) => [item.pilgrimId, item]));
-  const paymentMap = new Map(crm.payments.map((item) => [item.pilgrimId, item]));
-  const groupByPilgrim = new Map(
-    crm.groupLinks.map((link) => [link.pilgrimId, crm.groups.find((group) => group.id === link.groupId)?.name ?? null]),
-  );
-  const docsByPilgrim = new Map(
-    crm.pilgrims.map((pilgrim) => [
-      pilgrim.id,
-      crm.documents.filter((document) => document.pilgrimId === pilgrim.id),
-    ]),
-  );
-  const resolveDocState = (documents: DocumentRecord[], type: DocumentRecord["type"]): "verified" | "uploaded" | "missing" => {
-    const item = documents.find((document) => document.type === type);
-    return item?.isVerified ? "verified" : item ? "uploaded" : "missing";
+  const rows = buildCrmPilgrimRows(crm as CrmBundleLike);
+  const q = (toValue(searchParams?.q) ?? "").trim();
+  const status = ((toValue(searchParams?.status) as FilterKey | undefined) ?? "all");
+  const page = Math.max(1, Number.parseInt(toValue(searchParams?.page) ?? "1", 10) || 1);
+  const pageSize = 15;
+  const normalizedQuery = q.toLowerCase();
+
+  const counters: Array<{ count: number; key: FilterKey; label: string }> = [
+    { count: rows.length, key: "all", label: "Все" },
+    { count: rows.filter((row) => row.pilgrim.status === "new").length, key: "new", label: "Новые" },
+    { count: rows.filter((row) => row.docsCount < 5).length, key: "no_docs", label: "Нет документов" },
+    { count: rows.filter((row) => row.paymentPercent < 100).length, key: "debt", label: "Долг" },
+    { count: rows.filter((row) => row.readiness.readinessPercent >= 90 || row.pilgrim.status === "ready").length, key: "ready", label: "Готовы" },
+    { count: rows.filter((row) => row.pilgrim.status === "departed").length, key: "departed", label: "Улетели" },
+  ];
+
+  const filteredRows = rows.filter((row) => {
+    const matchesQuery =
+      !normalizedQuery ||
+      row.fullName.toLowerCase().includes(normalizedQuery) ||
+      row.phone.toLowerCase().includes(normalizedQuery) ||
+      row.pilgrim.iin.includes(normalizedQuery.replace(/\D/g, ""));
+
+    return matchesQuery && matchesFilter(row, status);
+  });
+
+  const pageCount = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visibleRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const avgReadiness = filteredRows.reduce((sum, item) => sum + item.readiness.readinessPercent, 0) / Math.max(filteredRows.length, 1);
+
+  const buildHref = (nextStatus: FilterKey, nextPage = 1) => {
+    const params = new URLSearchParams();
+    if (q) {
+      params.set("q", q);
+    }
+    if (nextStatus !== "all") {
+      params.set("status", nextStatus);
+    }
+    if (nextPage > 1) {
+      params.set("page", String(nextPage));
+    }
+    return params.size ? `/crm/pilgrims?${params.toString()}` : "/crm/pilgrims";
   };
 
-  const rows = crm.pilgrims.map((pilgrim) => ({
-    pilgrim,
-    docs: docsByPilgrim.get(pilgrim.id) ?? [],
-  })).map(({ pilgrim, docs }) => ({
-    pilgrim,
-    docs: {
-      passport: resolveDocState(docs, "passport"),
-      medical_certificate: resolveDocState(docs, "medical_certificate"),
-      photo: resolveDocState(docs, "photo"),
-      questionnaire: resolveDocState(docs, "questionnaire"),
-      vaccination: resolveDocState(docs, "vaccination"),
-    },
-    groupName: groupByPilgrim.get(pilgrim.id) ?? null,
-    paymentStatus: paymentMap.get(pilgrim.id)?.status ?? null,
-    readinessPercent: readinessMap.get(pilgrim.id)?.readinessPercent ?? 0,
-    docsCount: readinessMap.get(pilgrim.id)?.docsCount ?? 0,
-  }));
-  const readyCount = rows.filter((row) => row.readinessPercent === 100).length;
-  const unassignedCount = rows.filter((row) => !row.groupName).length;
-  const paymentPendingCount = rows.filter((row) => row.paymentStatus !== "paid").length;
-
   return (
-    <div className="grid gap-6">
-      <section className="shell-panel p-6">
-        <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+    <>
+      <CrmTopbar
+        title={
+          <>
+            Паломники — <em>{crm.pilgrims.length}</em> в сезоне.
+          </>
+        }
+        actions={
+          <>
+            <a className="btn btn-ghost btn-sm" href="/api/crm/pilgrims/export">
+              Экспорт Excel
+            </a>
+            <Link className="btn btn-dark btn-sm" href="#new-pilgrim">
+              + Добавить паломника
+            </Link>
+          </>
+        }
+      />
+
+      <div className="crm-filter" style={{ alignItems: "center", gap: 10 }}>
+        <form action="/crm/pilgrims" method="get" style={{ display: "contents" }}>
+          <input
+            aria-label="Поиск паломника"
+            className="search-box"
+            defaultValue={q}
+            name="q"
+            placeholder="Имя, ИИН, телефон…"
+            style={{ width: 260 }}
+            type="search"
+          />
+          {status !== "all" ? <input name="status" type="hidden" value={status} /> : null}
+        </form>
+        {counters.map((item) => (
+          <Link className={`chip ${status === item.key ? "on" : ""}`} href={buildHref(item.key)} key={item.key}>
+            {item.label} <span className="c">{item.count}</span>
+          </Link>
+        ))}
+      </div>
+
+      <div className="crm-tbl">
+        <div className="bulk">
           <div>
-            <Badge>CRM ядро</Badge>
-            <h2 className="mt-4 text-4xl">Паломники и readiness</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
-              Здесь оператор видит документы, оплату, назначение в группу и может запускать массовые действия по фильтру.
-            </p>
+            Выбрано <b>{Math.min(3, visibleRows.length)}</b> из {filteredRows.length} · <Link href="/crm/notifications">Отправить напоминание</Link> ·{" "}
+            <a href="/api/crm/pilgrims/export">Экспорт</a>
           </div>
-          <a href="/api/crm/pilgrims/export" className={cn(buttonVariants({ variant: "default" }), "w-fit")}>
-            <Download className="h-4 w-4" />
-            Экспорт в Excel
-          </a>
-        </div>
-        <div className="mt-6 flex flex-wrap gap-3">
-          {filters.map((filter, index) => (
-            <div key={filter} className={`data-chip ${index === 2 ? "border-primary/25 bg-primary/10 text-primary" : ""}`}>
-              <Filter className="h-4 w-4" />
-              {filter}
-            </div>
-          ))}
-        </div>
-        <div className="mt-6 grid gap-4 md:grid-cols-3">
-          <div className="subtle-panel p-4">
-            <p className="text-sm uppercase tracking-[0.16em] text-muted-foreground">Всего в CRM</p>
-            <p className="mt-2 text-3xl font-semibold">{rows.length}</p>
+          <div>
+            Показано {visibleRows.length} из {filteredRows.length} · статус <b>{counters.find((item) => item.key === status)?.label ?? "Все"}</b>
           </div>
-          <div className="subtle-panel p-4">
-            <p className="text-sm uppercase tracking-[0.16em] text-muted-foreground">Готовы к вылету</p>
-            <p className="mt-2 text-3xl font-semibold">{readyCount}</p>
-          </div>
-          <div className="subtle-panel p-4">
-            <p className="text-sm uppercase tracking-[0.16em] text-muted-foreground">Требуют внимания</p>
-            <p className="mt-2 text-3xl font-semibold">{Math.max(unassignedCount, paymentPendingCount)}</p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Без группы: {unassignedCount} · Не оплачено: {paymentPendingCount}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <div className="shell-panel p-6">
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <div>
-              <Badge variant="secondary">Новый паломник</Badge>
-              <h3 className="mt-4 text-3xl">Создать карточку и доступ</h3>
-              <p className="mt-2 text-sm leading-7 text-muted-foreground">
-                Создаётся `Supabase Auth` пользователь, профиль паломника, базовый платёж и стартовый чек-лист.
-              </p>
-            </div>
-            <UserPlus2 className="h-6 w-6 text-secondary" />
-          </div>
-          <PilgrimCreateForm />
         </div>
 
-        <div className="shell-panel p-6">
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <div>
-              <Badge variant="warning">Назначение</Badge>
-              <h3 className="mt-4 text-3xl">Распределить по группе</h3>
-              <p className="mt-2 text-sm leading-7 text-muted-foreground">
-                Назначение учитывает квоту группы. Если паломник уже был в другой группе, связь будет перенесена.
-              </p>
-            </div>
-            <Layers3 className="h-6 w-6 text-warning" />
-          </div>
-          <GroupAssignmentForm groups={crm.groups} pilgrims={crm.pilgrims} />
-        </div>
-      </section>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}>✓</th>
+              <th>Паломник</th>
+              <th>Группа</th>
+              <th>Готовность</th>
+              <th>Документы</th>
+              <th>Оплата</th>
+              <th>Активность</th>
+              <th style={{ width: 80 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((row, index) => (
+              <tr key={row.id}>
+                <td>
+                  <input defaultChecked={index < 3} type="checkbox" />
+                </td>
+                <td>
+                  <div className="ppl">
+                    <div className="avatar" style={{ background: row.avatarTone }}>
+                      {row.initials}
+                    </div>
+                    <div>
+                      <div className="n">{row.fullName}</div>
+                      <div className="i">
+                        {row.iin} · {getPilgrimStatusLabel(row.pilgrim.status)}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td>{row.groupName}</td>
+                <td>
+                  <div className="rb2">
+                    <div className={`bar ${getProgressTone(row.readiness.readinessPercent)}`}>
+                      <i style={{ width: `${row.readiness.readinessPercent}%` }} />
+                    </div>
+                    <b>{row.readiness.readinessPercent}%</b>
+                  </div>
+                </td>
+                <td>{row.docsCount} / 5</td>
+                <td>{formatPercent(row.paymentPercent)}</td>
+                <td>{row.activity}</td>
+                <td>
+                  <div className="row-actions">
+                    <Link className="ibtn" href="/crm/notifications">
+                      WA
+                    </Link>
+                    <Link className="ibtn" href={`/crm/pilgrims/${getPilgrimRouteId(row.pilgrim)}`}>
+                      ›
+                    </Link>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
-      <section className="shell-panel overflow-hidden p-0">
-        <div className="border-b border-white/10 px-6 py-5">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="paginator">
+          <span>Средняя готовность — {formatPercent(avgReadiness)}</span>
+          <span style={{ display: "flex", gap: 8 }}>
+            {Array.from({ length: pageCount }, (_, index) => {
+              const pageNumber = index + 1;
+              return (
+                <Link
+                  className={`chip ${pageNumber === currentPage ? "on" : ""}`}
+                  href={buildHref(status, pageNumber)}
+                  key={pageNumber}
+                  style={{ minWidth: 36, textAlign: "center" }}
+                >
+                  {pageNumber}
+                </Link>
+              );
+            })}
+          </span>
+        </div>
+      </div>
+
+      <div className="groups-grid" style={{ paddingTop: 0 }}>
+        <div className="group-card" id="new-pilgrim">
+          <div className="gh">
             <div>
-              <h3 className="text-3xl">Таблица паломников</h3>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Readiness считается из SQL view, документы показываются по всем 5 обязательным типам.
-              </p>
+              <h4>Новый паломник</h4>
+              <div className="route">Создать карточку и доступ в кабинет</div>
             </div>
-            <Badge>{formatPercent(rows.reduce((sum, row) => sum + row.readinessPercent, 0) / Math.max(rows.length, 1))} средняя готовность</Badge>
+          </div>
+          <div className="gbody" style={{ display: "block" }}>
+            <PilgrimCreateForm />
           </div>
         </div>
-        <PilgrimTable rows={rows} />
-      </section>
-    </div>
+
+        <div className="group-card">
+          <div className="gh">
+            <div>
+              <h4>Назначение в группу</h4>
+              <div className="route">Переносит связь паломника и учитывает квоту</div>
+            </div>
+          </div>
+          <div className="gbody" style={{ display: "block" }}>
+            <GroupAssignmentForm groups={crm.groups} pilgrims={crm.pilgrims} />
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

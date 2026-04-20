@@ -1,4 +1,6 @@
-import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
+
+import { CabinetTopbar } from "@/components/cabinet/cabinet-topbar";
 import { DocumentUploadBoard } from "@/components/cabinet/document-upload-board";
 import { loadCabinetBundle } from "@/lib/data/hajj-loaders";
 
@@ -9,24 +11,37 @@ export default async function CabinetDocumentsPage() {
     return null;
   }
 
-  const { documents, payment, group } = cabinet;
+  const docsCount = new Set(cabinet.documents.map((document) => document.type)).size;
 
   return (
-    <div className="grid gap-6">
-      <div className="shell-panel p-6">
-        <Badge>Документы и валидация</Badge>
-        <h2 className="mt-4 text-4xl">Файлы для визы и вылета</h2>
-        <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
-          Экран работает по live-сценарию v1: файл уходит в Supabase Storage, запись обновляется в таблице documents, а
-          readiness пересчитывается через pilgrim_readiness_view.
-        </p>
+    <>
+      <CabinetTopbar
+        actions={
+          <Link className="btn btn-ghost btn-sm" href="/cabinet/contract">
+            Скачать все ZIP
+          </Link>
+        }
+        title={
+          <>
+            Документы — <em>{docsCount} из 5.</em>
+          </>
+        }
+      />
+
+      <div className="docs-hero">
+        <span className="eyebrow">Готовность документов</span>
+        <h1>
+          Один документ <em>остался</em> — закройте пакет до вылета.
+        </h1>
+        <p>Все 5 типов документов нужны для визы КСА. Загруженные файлы сразу попадают в Storage, а статус проверки обновляется в кабинете.</p>
       </div>
 
       <DocumentUploadBoard
-        initialDocuments={documents}
-        paymentComplete={payment?.status === "paid"}
-        hasGroup={Boolean(group)}
+        hasGroup={Boolean(cabinet.group)}
+        initialDocuments={cabinet.documents}
+        notifications={cabinet.notifications}
+        paymentComplete={cabinet.payment?.status === "paid"}
       />
-    </div>
+    </>
   );
 }

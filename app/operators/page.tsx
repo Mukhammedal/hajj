@@ -1,53 +1,82 @@
-import { Filter, Star } from "lucide-react";
-
-import { OperatorCard } from "@/components/marketing/operator-card";
-import { SiteHeader } from "@/components/shell/site-header";
-import { Badge } from "@/components/ui/badge";
+import { OperatorsCatalog } from "@/components/marketing/operators-catalog";
+import { PublicTopbar } from "@/components/shell/public-topbar";
+import { buildShowcaseOperators } from "@/lib/design-public";
 import { loadPublicOperatorCards } from "@/lib/data/hajj-loaders";
 
-const filters = [
-  "Город: Алматы",
-  "Город: Астана",
-  "Рейтинг 4.5+",
-  "Свободная квота > 10",
-];
+type SearchParams = Record<string, string | string[] | undefined>;
 
-export default async function OperatorsPage() {
-  const operators = await loadPublicOperatorCards();
+function getFirstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function getArrayParam(value: string | string[] | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}
+
+export default async function OperatorsPage({ searchParams }: { searchParams?: SearchParams }) {
+  const allOperators = buildShowcaseOperators(await loadPublicOperatorCards());
+  const query = getFirstParam(searchParams?.q)?.trim() ?? "";
+  const chipCity = getFirstParam(searchParams?.city) ?? "Все";
+  const selectedCities = getArrayParam(searchParams?.cities);
+  const ratingValue = Number(getFirstParam(searchParams?.rating) ?? "4.8");
+  const minRating = Number.isFinite(ratingValue) && ratingValue >= 4 ? ratingValue : 4.8;
+  const sortParam = getFirstParam(searchParams?.sort);
+  const sort = sortParam === "price" || sortParam === "quota" ? sortParam : "rating";
+  const requestedPage = Number(getFirstParam(searchParams?.page) ?? "1");
+  const pageSize = 12;
+  const normalizedQuery = query.toLowerCase();
+  const cityFilter = chipCity !== "Все" ? [chipCity] : selectedCities;
+
+  const filteredOperators = [...allOperators]
+    .filter((operator) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        operator.companyName.toLowerCase().includes(normalizedQuery) ||
+        operator.licenseNumber.toLowerCase().includes(normalizedQuery);
+      const matchesCity = !cityFilter.length || cityFilter.includes(operator.city);
+      const matchesRating = operator.rating >= minRating;
+
+      return matchesQuery && matchesCity && matchesRating;
+    })
+    .sort((left, right) => {
+      if (sort === "price") {
+        return left.priceFrom - right.priceFrom;
+      }
+
+      if (sort === "quota") {
+        return right.quotaLeft - left.quotaLeft;
+      }
+
+      return right.rating - left.rating;
+    });
+
+  const pageCount = Math.max(1, Math.ceil(filteredOperators.length / pageSize));
+  const page = Number.isFinite(requestedPage) ? Math.min(Math.max(requestedPage, 1), pageCount) : 1;
+  const operators = filteredOperators.slice((page - 1) * pageSize, page * pageSize);
 
   return (
-    <div className="page-wrap">
-      <SiteHeader />
-      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-        <div className="mb-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <Badge>Открытый реестр</Badge>
-            <h1 className="mt-4 text-5xl">Проверенные хадж-операторы</h1>
-            <p className="mt-4 max-w-3xl text-lg leading-8 text-muted-foreground">
-              Каталог для лидогенерации: карточки показывают рейтинг, лицензию, свободную квоту и дают быстрый переход к
-              бронированию.
-            </p>
-          </div>
-          <div className="shell-panel flex items-center gap-3 px-5 py-4">
-            <Filter className="h-5 w-5 text-primary" />
-            <span className="text-sm text-muted-foreground">Фильтры можно связать с Server Actions или search params.</span>
-          </div>
-        </div>
-
-        <div className="mb-8 flex flex-wrap gap-3">
-          {filters.map((filter, index) => (
-            <div key={filter} className={`data-chip ${index === 2 ? "border-primary/20 bg-primary/10 text-primary" : ""}`}>
-              {index === 2 ? <Star className="h-4 w-4" /> : null}
-              {filter}
-            </div>
-          ))}
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-3">
-          {operators.map((item) => (
-            <OperatorCard key={item.operator.id} operator={item.operator} city={item.city} quotaLeft={item.quotaLeft} />
-          ))}
-        </div>
+    <div className="page-wrap app-shell">
+      <PublicTopbar
+        activeHref="/operators"
+        links={[
+          { href: "/operators", label: "Операторы" },
+          { href: "/#how-it-works", label: "Как это работает" },
+          { href: "/verify/QR-HJ-2026-ERLAN-A4", label: "Проверить договор" },
+        ]}
+      />
+      <main>
+        <OperatorsCatalog
+          allOperators={allOperators}
+          currentPage={page}
+          filters={{ chipCity, minRating, query, selectedCities, sort }}
+          operators={operators}
+          pageCount={pageCount}
+          totalCount={filteredOperators.length}
+        />
       </main>
     </div>
   );

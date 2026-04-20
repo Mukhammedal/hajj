@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 
-import { initialActionState, createGroupAction } from "@/lib/actions/hajj-actions";
+import { initialActionState } from "@/lib/actions/action-state";
+import { createGroupAction } from "@/lib/actions/hajj-actions";
 import { groupSchema, type GroupInput } from "@/lib/validation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -126,7 +127,7 @@ export function GroupCreateForm() {
             name="guidePhone"
             value={values.guidePhone}
             onChange={(event) => setValues((prev) => ({ ...prev, guidePhone: event.target.value }))}
-            placeholder="+7 707 700 12 12"
+            placeholder="+77077001212"
             required
           />
         </FormField>

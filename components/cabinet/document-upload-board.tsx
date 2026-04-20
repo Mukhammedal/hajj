@@ -1,28 +1,22 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { CheckCircle2, Clock3, ExternalLink, FileUp } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import {
-  ALLOWED_DOCUMENT_MIME_TYPES,
-  DOCUMENT_META,
-  MAX_DOCUMENT_FILE_SIZE,
-  computeReadinessPercent,
-} from "@/lib/documents";
+import { DesignIcon } from "@/components/shell/design-icons";
+import { DOCUMENT_META, ALLOWED_DOCUMENT_MIME_TYPES, MAX_DOCUMENT_FILE_SIZE, computeReadinessPercent } from "@/lib/documents";
+import { buildDocumentRows, formatShortDate, mapNotificationTone } from "@/lib/design-cabinet";
 import { cn } from "@/lib/utils";
-import type { DocumentRecord, DocumentType, PilgrimReadiness } from "@/types/domain";
+import type { DocumentRecord, DocumentType, NotificationRecord, PilgrimReadiness } from "@/types/domain";
 
 type LocalDoc = Pick<DocumentRecord, "type" | "fileName" | "fileUrl" | "isVerified" | "uploadedAt"> & {
   isUploading?: boolean;
 };
 
 interface DocumentUploadBoardProps {
-  initialDocuments: DocumentRecord[];
-  paymentComplete: boolean;
   hasGroup: boolean;
+  initialDocuments: DocumentRecord[];
+  notifications?: NotificationRecord[];
+  paymentComplete: boolean;
 }
 
 interface UploadResponse {
@@ -93,7 +87,16 @@ function uploadDocument(type: DocumentType, file: File, onProgress: (progress: n
   });
 }
 
-export function DocumentUploadBoard({ initialDocuments, paymentComplete, hasGroup }: DocumentUploadBoardProps) {
+function resolveActionType(documents: LocalDoc[]) {
+  return DOCUMENT_META.find((meta) => !documents.some((document) => document.type === meta.type))?.type ?? "vaccination";
+}
+
+export function DocumentUploadBoard({
+  hasGroup,
+  initialDocuments,
+  notifications = [],
+  paymentComplete,
+}: DocumentUploadBoardProps) {
   const [localDocs, setLocalDocs] = useState<LocalDoc[]>(keepLatestDocuments(initialDocuments));
   const [confirmedReadinessPercent, setConfirmedReadinessPercent] = useState<number | null>(null);
   const [progressByType, setProgressByType] = useState<Record<string, number>>({});
@@ -108,6 +111,29 @@ export function DocumentUploadBoard({ initialDocuments, paymentComplete, hasGrou
     const docsCount = new Set(localDocs.map((doc) => doc.type)).size;
     return computeReadinessPercent(docsCount, paymentComplete, hasGroup);
   }, [confirmedReadinessPercent, hasGroup, localDocs, paymentComplete]);
+
+  const docsCount = new Set(localDocs.map((document) => document.type)).size;
+  const progressPercent = Math.round((docsCount / DOCUMENT_META.length) * 100);
+  const preferredType = resolveActionType(localDocs);
+  const documentRows = buildDocumentRows(localDocs as DocumentRecord[]);
+  const uploadInProgress = Object.values(progressByType).some((value) => value > 0 && value < 100);
+  const activityItems = [
+    ...notifications.map((notification) => ({
+      detail: notification.message,
+      time: formatShortDate(notification.sentAt ?? notification.scheduledAt),
+      title: notification.status === "sent" ? "Уведомление отправлено" : "Напоминание поставлено",
+      tone: mapNotificationTone(notification.status),
+    })),
+    ...localDocs
+      .filter((document) => document.uploadedAt)
+      .slice(0, 4)
+      .map((document) => ({
+        detail: `${DOCUMENT_META.find((meta) => meta.type === document.type)?.title ?? document.type} · ${document.fileName}`,
+        time: formatShortDate(document.uploadedAt),
+        title: document.isVerified ? "Документ принят куратором" : "Документ отправлен на проверку",
+        tone: document.isVerified ? "ok" : "warn",
+      })),
+  ].slice(0, 5);
 
   function triggerUpload(type: DocumentType) {
     inputRefs.current[type]?.click();
@@ -190,130 +216,128 @@ export function DocumentUploadBoard({ initialDocuments, paymentComplete, hasGrou
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-      <div className="shell-panel p-6">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-2xl font-semibold">Загрузка документов</p>
-            <p className="mt-2 text-sm text-muted-foreground">Валидация идёт сразу: формат PDF/JPG/PNG и размер до 5 МБ.</p>
-          </div>
-          <Badge variant="secondary">Моментальное обновление готовности</Badge>
-        </div>
+    <>
+      {DOCUMENT_META.map((item) => (
+        <input
+          key={item.type}
+          ref={(node) => {
+            inputRefs.current[item.type] = node;
+          }}
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png"
+          className="hidden"
+          onChange={(event) => {
+            void handleFile(item.type, event.target.files?.[0] ?? null);
+            event.currentTarget.value = "";
+          }}
+        />
+      ))}
 
-        <div className="grid gap-4">
-          {DOCUMENT_META.map((item) => {
-            const uploaded = localDocs.find((doc) => doc.type === item.type);
-            const progress = progressByType[item.type] ?? 0;
-            const error = errorByType[item.type];
+      <button type="button" className="dropzone" onClick={() => triggerUpload(preferredType)}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: "50%",
+            background: "var(--cream-2)",
+            display: "grid",
+            placeItems: "center",
+            margin: "0 auto 12px",
+            color: "var(--muted)",
+          }}
+        >
+          <DesignIcon name="doc" size={18} />
+        </div>
+        <h4>{uploadInProgress ? "Загрузка в Supabase Storage…" : "Перетащите файл сюда или выберите с диска"}</h4>
+        <p>PDF, JPG, PNG · до 5 МБ · приоритетный тип: {preferredType}</p>
+      </button>
+
+      <div className="docs-body">
+        <div className="docs-list">
+          <div className="doc-total">
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 700, color: "var(--muted)" }}>
+                Прогресс
+              </div>
+              <div className="v">{docsCount} из 5 документов</div>
+            </div>
+            <div style={{ flex: 1, maxWidth: 240, marginLeft: 24 }}>
+              <div className="bar em">
+                <i style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
+            <div style={{ fontFamily: "var(--f-serif)", fontWeight: 600, fontSize: 22 }}>{progressPercent}%</div>
+          </div>
+
+          {documentRows.map((row) => {
+            const currentDocument = localDocs.find((document) => document.type === row.type);
+            const progress = progressByType[row.type] ?? 0;
+            const error = errorByType[row.type];
+            const statusClass = !currentDocument ? "danger" : currentDocument.isVerified ? "success" : currentDocument.isUploading ? "warning" : "warning";
+            const statusLabel = !currentDocument ? "Не загружено" : currentDocument.isVerified ? "✓ Принят" : currentDocument.isUploading ? "Загрузка" : "На проверке";
 
             return (
-              <div key={item.type} className="subtle-panel p-4">
-                <input
-                  ref={(node) => {
-                    inputRefs.current[item.type] = node;
-                  }}
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  className="hidden"
-                  onChange={(event) => {
-                    void handleFile(item.type, event.target.files?.[0] ?? null);
-                    event.currentTarget.value = "";
-                  }}
-                />
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <p className="font-semibold">{item.title}</p>
-                      {uploaded?.isVerified ? (
-                        <Badge variant="success">Проверено</Badge>
-                      ) : uploaded?.isUploading ? (
-                        <Badge variant="secondary">Загрузка</Badge>
-                      ) : uploaded ? (
-                        <Badge variant="warning">На проверке</Badge>
-                      ) : (
-                        <Badge variant="muted">Не загружено</Badge>
-                      )}
-                    </div>
-                    <p className="mt-2 text-sm text-muted-foreground">{item.hint}</p>
-                    {uploaded ? <p className="mt-2 text-sm text-foreground">{uploaded.fileName}</p> : null}
-                    {uploaded?.fileUrl ? (
-                      <a
-                        href={uploaded.fileUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-2 inline-flex items-center gap-2 text-sm text-primary transition-colors hover:text-primary/80"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        Открыть файл
-                      </a>
-                    ) : null}
-                    {error ? <p className="mt-2 text-sm text-danger">{error}</p> : null}
-                  </div>
-                  <Button variant="outline" disabled={uploaded?.isUploading} onClick={() => triggerUpload(item.type)}>
-                    <FileUp className="h-4 w-4" />
-                    {uploaded?.isUploading ? "Загрузка..." : uploaded ? "Заменить" : "Загрузить"}
-                  </Button>
+              <div key={row.type} className="doc-row">
+                <div
+                  className={cn("ic", !currentDocument && "border border-transparent")}
+                  style={!currentDocument ? { background: "var(--danger-bg)", color: "var(--danger)" } : undefined}
+                >
+                  <DesignIcon name="doc" size={18} />
                 </div>
-                {progress > 0 && progress < 100 ? <Progress className="mt-4" value={progress} /> : null}
+                <div className="meta">
+                  <h5>{row.title}</h5>
+                  <div className="d">{row.detail}</div>
+                  {currentDocument?.fileUrl ? (
+                    <a
+                      href={currentDocument.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--emerald)] no-underline"
+                    >
+                      Открыть файл
+                    </a>
+                  ) : null}
+                  {progress > 0 && progress < 100 ? (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="bar em">
+                        <i style={{ width: `${progress}%` }} />
+                      </div>
+                    </div>
+                  ) : null}
+                  {error ? <div className="mt-2 text-[11px] text-[var(--danger)]">{error}</div> : null}
+                </div>
+                <span className={cn("tag", statusClass)}>{statusLabel}</span>
+                <button
+                  type="button"
+                  className={cn("btn btn-sm", currentDocument ? "btn-ghost" : "btn-dark")}
+                  disabled={currentDocument?.isUploading}
+                  onClick={() => triggerUpload(row.type)}
+                >
+                  {currentDocument?.isUploading ? "Загрузка…" : currentDocument ? "Заменить" : "Загрузить"}
+                </button>
               </div>
             );
           })}
         </div>
-      </div>
 
-      <div className="shell-panel p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-2xl font-semibold">Готовность к вылету</p>
-            <p className="mt-2 text-sm text-muted-foreground">Процент обновляется оптимистично сразу и затем подтверждается из БД.</p>
+        <div className="activity">
+          <h5>История действий</h5>
+          {activityItems.map((item, index) => (
+            <div key={`${item.title}-${item.time}-${index}`} className="activity-item">
+              <div className={cn("dot", item.tone)} />
+              <div>
+                <div className="t">{item.title}</div>
+                <div className="d">{item.detail}</div>
+              </div>
+              <div className="when">{item.time}</div>
+            </div>
+          ))}
+          <div className="mt-5 rounded-[6px] border border-[var(--line)] bg-[var(--cream)] px-4 py-3 text-[12px] text-[var(--muted)]">
+            Готовность сейчас подтверждена на <span className="text-[var(--ink)]">{readinessPercent}%</span>. После пятого документа система автоматически проверит
+            статус `ready`.
           </div>
-          <div className="flex h-24 w-24 items-center justify-center rounded-full border border-primary/20 bg-primary/10 font-display text-3xl text-primary">
-            {readinessPercent}%
-          </div>
-        </div>
-
-        <Progress className="mt-6" value={readinessPercent} />
-
-        <div className="mt-8 grid gap-3">
-          <StatusRow
-            label="Полный пакет документов"
-            complete={new Set(localDocs.map((doc) => doc.type)).size === DOCUMENT_META.length}
-          />
-          <StatusRow label="Оплата закрыта" complete={paymentComplete} />
-          <StatusRow label="Группа назначена" complete={hasGroup} />
-        </div>
-
-        <div className="mt-8 subtle-panel p-4">
-          <p className="text-sm leading-6 text-muted-foreground">
-            Как только все 5 типов документов загружены, оплата отмечена как <span className="text-foreground">paid</span> и
-            паломник привязан к группе, система переводит статус в <span className="text-foreground">ready</span>.
-          </p>
         </div>
       </div>
-    </div>
-  );
-}
-
-function StatusRow({ label, complete }: { label: string; complete: boolean }) {
-  return (
-    <div
-      className={cn(
-        "flex items-center justify-between rounded-2xl border px-4 py-3",
-        complete ? "border-success/25 bg-success/10" : "border-white/10 bg-white/5",
-      )}
-    >
-      <span className="text-sm">{label}</span>
-      {complete ? (
-        <span className="inline-flex items-center gap-2 text-sm text-success">
-          <CheckCircle2 className="h-4 w-4" />
-          Готово
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-2 text-sm text-warning">
-          <Clock3 className="h-4 w-4" />
-          В ожидании
-        </span>
-      )}
-    </div>
+    </>
   );
 }

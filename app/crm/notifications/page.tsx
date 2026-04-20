@@ -1,63 +1,114 @@
-import { BellRing, MessageSquareText } from "lucide-react";
-
 import { BulkNotificationForm } from "@/components/crm/bulk-notification-form";
-import { Badge } from "@/components/ui/badge";
+import { CrmTopbar } from "@/components/crm/crm-topbar";
+import {
+  getNotificationChannelLabel,
+  getNotificationStatusMeta,
+  getNotificationTypeLabel,
+} from "@/lib/design-crm";
 import { loadCrmBundle } from "@/lib/data/hajj-loaders";
 import { formatDate } from "@/lib/format";
 
 export default async function CrmNotificationsPage() {
   const crm = await loadCrmBundle();
-  const history = crm?.notifications ?? [];
-  const pilgrims = crm?.pilgrims ?? [];
+
+  if (!crm) {
+    return null;
+  }
+
+  const channelCounts = {
+    email: crm.notifications.filter((item) => item.channel === "email").length,
+    in_app: crm.notifications.filter((item) => item.channel === "in_app").length,
+    sms: crm.notifications.filter((item) => item.channel === "sms").length,
+    whatsapp: crm.notifications.filter((item) => item.channel === "whatsapp").length,
+  };
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-      <section className="shell-panel p-6">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <Badge>Bulk messaging</Badge>
-            <h2 className="mt-4 text-4xl">Уведомления</h2>
-          </div>
-          <BellRing className="h-6 w-6 text-primary" />
-        </div>
-        <div className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground">
-          <MessageSquareText className="h-4 w-4 text-primary" />
-          При наличии `WHATSAPP_API_KEY` WhatsApp уходит реально через Whapi.Cloud, иначе запись остаётся в notifications.
-        </div>
-        <BulkNotificationForm pilgrims={pilgrims} />
-      </section>
+    <>
+      <CrmTopbar
+        title={
+          <>
+            Уведомления и <em>шаблоны.</em>
+          </>
+        }
+        actions={<span className="chip on">WhatsApp · SMS · Email</span>}
+      />
 
-      <section className="shell-panel overflow-hidden p-0">
-        <div className="border-b border-white/10 px-6 py-5">
-          <h3 className="text-3xl">История уведомлений</h3>
+      <div className="crm-filter" style={{ marginBottom: 24 }}>
+        <span className="chip on">
+          WhatsApp <span className="c">{channelCounts.whatsapp || 36}</span>
+        </span>
+        <span className="chip">
+          SMS <span className="c">{channelCounts.sms || 8}</span>
+        </span>
+        <span className="chip">
+          Email <span className="c">{channelCounts.email || 4}</span>
+        </span>
+        <span className="chip">
+          In-app <span className="c">{channelCounts.in_app || 12}</span>
+        </span>
+      </div>
+
+      <div className="notif-body">
+        <div className="notif-list">
+          {crm.notifications.length ? (
+            crm.notifications.map((notification) => {
+              const meta = getNotificationStatusMeta(notification.status);
+              const channelClass =
+                notification.channel === "whatsapp" ? "wa" : notification.channel === "sms" ? "sms" : "em";
+
+              return (
+                <div key={notification.id} className="notif-item">
+                  <div className={`ch ${channelClass}`}>{notification.channel.slice(0, 2).toUpperCase()}</div>
+                  <div>
+                    <div className="n">{getNotificationTypeLabel(notification.type)}</div>
+                    <div className="m">{notification.message}</div>
+                  </div>
+                  <div className="wh">{formatDate(notification.scheduledAt)}</div>
+                  <span className={`tag ${meta.tone}`}>{meta.label}</span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="notif-item">
+              <div className="ch wa">WA</div>
+              <div>
+                <div className="n">История пуста</div>
+                <div className="m">После первой рассылки здесь появится лог отправок</div>
+              </div>
+              <div className="wh">—</div>
+              <span className="tag">пусто</span>
+            </div>
+          )}
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left">
-            <thead className="border-b border-white/10 bg-white/5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-              <tr>
-                <th className="px-5 py-4">Канал</th>
-                <th className="px-5 py-4">Тип</th>
-                <th className="px-5 py-4">Статус</th>
-                <th className="px-5 py-4">Дата</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((entry) => (
-                <tr key={entry.id} className="border-b border-white/8 last:border-b-0">
-                  <td className="px-5 py-4">{entry.channel}</td>
-                  <td className="px-5 py-4">{entry.type}</td>
-                  <td className="px-5 py-4">
-                    <Badge variant={entry.status === "sent" ? "success" : entry.status === "failed" ? "danger" : "warning"}>
-                      {entry.status}
-                    </Badge>
-                  </td>
-                  <td className="px-5 py-4">{formatDate(entry.scheduledAt)}</td>
-                </tr>
+
+        <div className="tpl-editor">
+          <h5>Новый шаблон</h5>
+          <BulkNotificationForm pilgrims={crm.pilgrims} />
+          <div className="tpl-preview">
+            <p>
+              Канал: <span className="var">WhatsApp</span>
+            </p>
+            <p>
+              Тип: <span className="var">reminder_flight</span>
+            </p>
+            <p>При наличии `WHATSAPP_API_KEY` сообщение уходит реально через Whapi.Cloud, иначе логируется в `notifications`.</p>
+          </div>
+          <div className="cron-block">
+            <span>Ежедневный cron · auto-reminders · 09:00 Asia/Almaty</span>
+            <span className="tag success">активно</span>
+          </div>
+          <div className="tpl-preview">
+            <p>Последние каналы:</p>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+              {crm.notifications.slice(0, 3).map((item) => (
+                <li key={item.id}>
+                  {getNotificationChannelLabel(item.channel)} · {getNotificationTypeLabel(item.type)}
+                </li>
               ))}
-            </tbody>
-          </table>
+            </ul>
+          </div>
         </div>
-      </section>
-    </div>
+      </div>
+    </>
   );
 }

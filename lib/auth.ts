@@ -13,8 +13,26 @@ export interface AuthState {
   user: User | null;
 }
 
-function normalizeRole(role: unknown): UserRole | null {
+export function normalizeRole(role: unknown): UserRole | null {
   return role === "admin" || role === "operator" || role === "pilgrim" ? role : null;
+}
+
+export async function resolveUserRole(
+  supabase: ReturnType<typeof createClient>,
+  user: Pick<User, "app_metadata" | "id" | "user_metadata"> | null | undefined,
+) {
+  let role = normalizeRole(user?.app_metadata?.role ?? user?.user_metadata?.role);
+
+  if (user && !role) {
+    const [{ data: operator }, { data: pilgrim }] = await Promise.all([
+      supabase.from("operators").select("id").eq("user_id", user.id).maybeSingle(),
+      supabase.from("pilgrim_profiles").select("id").eq("user_id", user.id).maybeSingle(),
+    ]);
+
+    role = operator ? "operator" : pilgrim ? "pilgrim" : null;
+  }
+
+  return role;
 }
 
 export function routeForRole(role: unknown) {
@@ -50,16 +68,7 @@ export async function getAuthState(): Promise<AuthState> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  let role = normalizeRole(user?.app_metadata?.role ?? user?.user_metadata?.role);
-
-  if (user && !role) {
-    const [{ data: operator }, { data: pilgrim }] = await Promise.all([
-      supabase.from("operators").select("id").eq("user_id", user.id).maybeSingle(),
-      supabase.from("pilgrim_profiles").select("id").eq("user_id", user.id).maybeSingle(),
-    ]);
-
-    role = operator ? "operator" : pilgrim ? "pilgrim" : null;
-  }
+  const role = await resolveUserRole(supabase, user);
 
   return {
     isConfigured: true,
@@ -81,8 +90,8 @@ export async function requireAnyRole(allowedRoles: UserRole[]) {
     redirect("/login");
   }
 
-  if (auth.role !== "admin" && !allowedRoles.includes(auth.role)) {
-    redirect(routeForRole(auth.role));
+  if (!allowedRoles.includes(auth.role)) {
+    redirect("/unauthorized");
   }
 
   return auth;

@@ -4,7 +4,8 @@ import type { ChangeEvent } from "react";
 import { useMemo, useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 
-import { assignPilgrimsToGroupAction, initialActionState } from "@/lib/actions/hajj-actions";
+import { initialActionState } from "@/lib/actions/action-state";
+import { assignPilgrimsToGroupAction } from "@/lib/actions/hajj-actions";
 import { groupAssignmentSchema, type GroupAssignmentInput } from "@/lib/validation";
 import { Button } from "@/components/ui/button";
 import type { GroupRecord, PilgrimProfile } from "@/types/domain";

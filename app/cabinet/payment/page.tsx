@@ -1,14 +1,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import QRCode from "qrcode";
-import { Download, QrCode, ReceiptText } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
-import { loadCabinetBundle } from "@/lib/data/hajj-loaders";
-import { formatDate, formatKzt } from "@/lib/format";
+import { CabinetTopbar } from "@/components/cabinet/cabinet-topbar";
 import { buildInstallmentSchedule } from "@/lib/contracts";
-import { cn } from "@/lib/utils";
+import { formatShortDate, mapPaymentMethodLabel } from "@/lib/design-cabinet";
+import { loadCabinetBundle } from "@/lib/data/hajj-loaders";
+import { formatKzt } from "@/lib/format";
 
 export default async function CabinetPaymentPage() {
   const cabinet = await loadCabinetBundle();
@@ -18,118 +16,191 @@ export default async function CabinetPaymentPage() {
     return null;
   }
 
-  const qrDataUrl = await QRCode.toDataURL(payment.qrCode ?? "pending-contract");
   const installmentPlan = buildInstallmentSchedule(payment);
   const remainingAmount = Math.max(payment.totalAmount - payment.paidAmount, 0);
+  const paymentPercent = payment.totalAmount > 0 ? Math.round((payment.paidAmount / payment.totalAmount) * 100) : 0;
+  const qrDataUrl = payment.qrCode ? await QRCode.toDataURL(payment.qrCode) : null;
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-      <section className="shell-panel p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <Badge variant={payment.status === "paid" ? "success" : payment.status === "partial" ? "warning" : "muted"}>
-              {payment.status === "paid" ? "Оплата завершена" : payment.status === "partial" ? "Частичная оплата" : "Ожидает оплаты"}
-            </Badge>
-            <h2 className="mt-4 text-4xl">Оплата и договор</h2>
-          </div>
-          <ReceiptText className="h-7 w-7 text-primary" />
-        </div>
-
-        <div className="mt-8 grid gap-4">
-          <DetailRow label="Общая сумма" value={formatKzt(payment.totalAmount)} />
-          <DetailRow label="Оплачено" value={formatKzt(payment.paidAmount)} />
-          <DetailRow label="Остаток" value={formatKzt(remainingAmount)} />
-          <DetailRow
-            label="Статус"
-            value={payment.status === "paid" ? "Оплачено" : payment.status === "partial" ? "Частично оплачено" : "Ожидает"}
-          />
-        </div>
-
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-          {payment.contractUrl ? (
-            <Link href={payment.contractUrl} target="_blank" rel="noreferrer" className={cn(buttonVariants())}>
-              <Download className="h-4 w-4" />
-              Скачать PDF договора
+    <>
+      <CabinetTopbar
+        actions={
+          <>
+            {payment.contractUrl ? (
+              <Link className="btn btn-ghost btn-sm" href={payment.contractUrl} target="_blank">
+                Договор PDF
+              </Link>
+            ) : null}
+            <Link className="btn btn-dark btn-sm" href="/cabinet/contract">
+              Закрыть остаток
             </Link>
-          ) : (
-            <span className={cn(buttonVariants(), "pointer-events-none opacity-50")}>
-              <Download className="h-4 w-4" />
-              Договор появится после статуса paid
-            </span>
-          )}
+          </>
+        }
+        title={
+          <>
+            Оплата — остаток <em>{formatKzt(remainingAmount)}.</em>
+          </>
+        }
+      />
 
-          {payment.qrCode ? (
-            <Link href={`/verify/${payment.qrCode}`} className={cn(buttonVariants({ variant: "outline" }))}>
-              <QrCode className="h-4 w-4" />
-              Открыть QR-проверку
-            </Link>
-          ) : (
-            <span className={cn(buttonVariants({ variant: "outline" }), "pointer-events-none opacity-50")}>
-              <QrCode className="h-4 w-4" />
-              QR появится после генерации договора
-            </span>
-          )}
+      <div className="pay-summary">
+        <div>
+          <div className="k">Сумма договора</div>
+          <div className="v">{formatKzt(payment.totalAmount)}</div>
         </div>
-      </section>
-
-      <section className="grid gap-6">
-        <div className="shell-panel p-6">
-          <div className="mb-6 flex items-center justify-between">
-            <h3 className="text-3xl">График оплаты</h3>
-            <Badge variant="secondary">{payment.installmentPlan ? `${payment.installmentMonths ?? 0} месяца` : "Без рассрочки"}</Badge>
+        <div>
+          <div className="k">Оплачено</div>
+          <div className="v" style={{ color: "var(--success)" }}>
+            {formatKzt(payment.paidAmount)}
           </div>
-          <div className="grid gap-3">
-            {installmentPlan.map((entry, index) => (
-              <div key={`${index}-${entry.amount}`} className="subtle-panel flex items-center justify-between p-4">
-                <div>
-                  <p className="font-semibold">{entry.label instanceof Date ? formatDate(entry.label.toISOString()) : entry.label}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{formatKzt(entry.amount)}</p>
+        </div>
+        <div>
+          <div className="k">Остаток</div>
+          <div className="v" style={{ color: "var(--warning)" }}>
+            {formatKzt(remainingAmount)}
+          </div>
+        </div>
+        <div className="prog">
+          <div className="k">Прогресс · {paymentPercent}%</div>
+          <div className="bar gold">
+            <i style={{ width: `${paymentPercent}%` }} />
+          </div>
+          <div className="meta">
+            {installmentPlan.length} транзакции · последняя {formatShortDate(payment.createdAt)} · {mapPaymentMethodLabel(payment.paymentMethod)}
+          </div>
+        </div>
+      </div>
+
+      <div className="method-tabs">
+        {[
+          { active: payment.paymentMethod === "kaspi", label: "Kaspi" },
+          { active: payment.paymentMethod === "halyk", label: "Halyk" },
+          { active: payment.paymentMethod === "kaspi", label: "Kaspi QR" },
+          { active: payment.paymentMethod === "cash", label: "Наличные" },
+        ].map((item) => (
+          <div key={item.label} className={item.active ? "tab on" : "tab"}>
+            {item.label}
+          </div>
+        ))}
+      </div>
+
+      <div className="pay-main">
+        <div className="installments">
+          <h4>
+            Рассрочка <em>Kaspi Red</em>
+          </h4>
+          <div className="s">0% на выбранный срок. Платёж фиксируется в истории и отражается в readiness.</div>
+          <div className="inst-grid">
+            {[3, 6, 12, 18].map((months) => {
+              const monthly = remainingAmount > 0 ? Math.round(remainingAmount / months) : 0;
+              return (
+                <div key={months} className={months === (payment.installmentMonths ?? 6) ? "inst on" : "inst"}>
+                  <div className="n">{months}</div>
+                  <div className="u">мес</div>
+                  <div className="per">{formatKzt(monthly)}/мес</div>
                 </div>
-                <Badge variant={entry.status === "paid" ? "success" : entry.status === "partial" ? "warning" : "muted"}>
-                  {entry.status === "paid" ? "Оплачен" : entry.status === "partial" ? "Частично" : "Ожидает"}
-                </Badge>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        </div>
 
-        <div className="shell-panel p-6">
-          <div className="flex items-start justify-between gap-4">
+          <div className="calc-out">
             <div>
-              <p className="text-3xl font-semibold">QR договора</p>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                После генерации договора QR-код открывает публичную страницу проверки без авторизации.
-              </p>
+              <div className="eyebrow">{payment.installmentMonths ?? 6} месяцев · 0%</div>
+              <div className="pl" style={{ marginTop: 4 }}>
+                {formatKzt(Math.round(remainingAmount / Math.max(payment.installmentMonths ?? 6, 1)))}
+                <span style={{ color: "var(--muted)", fontFamily: "var(--f-serif)", fontStyle: "italic", fontSize: 14 }}> / мес</span>
+              </div>
             </div>
-            <Badge variant="muted">Hash: {payment.qrCode ?? "ещё не присвоен"}</Badge>
+            <Link className="btn btn-dark" href="/cabinet/contract">
+              Оформить <span className="arr">›</span>
+            </Link>
           </div>
-          <div className="mt-6 flex flex-col gap-6 md:flex-row md:items-center">
-            <Image
-              src={qrDataUrl}
-              alt="QR договора"
-              width={160}
-              height={160}
-              unoptimized
-              className="h-40 w-40 rounded-[1.8rem] border border-white/10 bg-white p-3"
-            />
-            <div className="space-y-3 text-sm text-muted-foreground">
-              <p>Сгенерирован: {payment.contractGeneratedAt ? formatDate(payment.contractGeneratedAt) : "ещё не создан"}</p>
-              <p>Способ оплаты: {payment.paymentMethod}</p>
-              <p>Создан платёж: {formatDate(payment.createdAt)}</p>
-              <p>История: зафиксировано {formatKzt(payment.paidAmount)} из {formatKzt(payment.totalAmount)}</p>
+
+          <div style={{ marginTop: 28 }}>
+            <h5 className="eyebrow" style={{ marginBottom: 14 }}>
+              История транзакций
+            </h5>
+            <table className="tx-table">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Сумма</th>
+                  <th>Метод</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {installmentPlan.map((entry, index) => (
+                  <tr key={`${entry.label}-${index}`}>
+                    <td>{typeof entry.label === "string" ? entry.label : formatShortDate(entry.label.toISOString())}</td>
+                    <td className="am">{formatKzt(entry.amount)}</td>
+                    <td>
+                      <span className="method-pill">
+                        <span className="m">{mapPaymentMethodLabel(payment.paymentMethod).slice(0, 1)}</span>
+                        {mapPaymentMethodLabel(payment.paymentMethod)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={entry.status === "paid" ? "tag success" : entry.status === "partial" ? "tag warning" : "tag"}>
+                        {entry.status === "paid" ? "✓ Оплачен" : entry.status === "partial" ? "Частично" : "Ожидает"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="pay-side">
+          <div className="card p-6">
+            <h5>Публичная QR-ссылка договора</h5>
+            <div className="qr-link">
+              <div className="qr">
+                {qrDataUrl ? <Image alt="QR" className="h-[68px] w-[68px]" height={68} src={qrDataUrl} unoptimized width={68} /> : null}
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, fontFamily: "var(--f-serif)", fontStyle: "italic", color: "var(--muted)", marginBottom: 6 }}>
+                  hajjcrm.kz/verify/
+                </div>
+                <div className="link-box">{payment.qrCode ?? "QR будет создан после полной оплаты"}</div>
+                <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                  {payment.qrCode ? (
+                    <Link className="btn btn-ghost btn-sm" href={`/verify/${payment.qrCode}`}>
+                      Открыть
+                    </Link>
+                  ) : null}
+                  <Link className="btn btn-ghost btn-sm" href="/cabinet/contract">
+                    Поделиться
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card p-6">
+            <h5>Договор PDF</h5>
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <div className="pdf-preview" style={{ flex: 1, border: 0, background: "transparent", padding: 0 }}>
+                <div className="pdficon">PDF</div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>Договор №{payment.id.slice(-6).toUpperCase()}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic", fontFamily: "var(--f-serif)" }}>
+                    4 стр · {payment.contractGeneratedAt ? formatShortDate(payment.contractGeneratedAt) : "ожидает генерации"}
+                  </div>
+                </div>
+              </div>
+              {payment.contractUrl ? (
+                <Link className="btn btn-dark btn-sm" href={payment.contractUrl} target="_blank">
+                  Скачать
+                </Link>
+              ) : (
+                <span className="btn btn-dark btn-sm opacity-50">Скачать</span>
+              )}
             </div>
           </div>
         </div>
-      </section>
-    </div>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-      <p className="text-sm uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-xl font-semibold">{value}</p>
-    </div>
+      </div>
+    </>
   );
 }

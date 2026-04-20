@@ -3,7 +3,8 @@
 import { BellRing } from "lucide-react";
 import { useFormState, useFormStatus } from "react-dom";
 
-import { initialActionState, sendFlightBroadcastAction } from "@/lib/actions/hajj-actions";
+import { initialActionState } from "@/lib/actions/action-state";
+import { sendFlightBroadcastAction } from "@/lib/actions/hajj-actions";
 import { Button } from "@/components/ui/button";
 
 export function GroupFlightBroadcastButton({

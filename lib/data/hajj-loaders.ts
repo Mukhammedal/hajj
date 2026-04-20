@@ -5,6 +5,7 @@ import { resolveSignedContractUrl } from "@/lib/contracts";
 import { computeReadinessFromDocuments, isStorageObjectPath } from "@/lib/documents";
 import { isSupabaseConfigured } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { slugify } from "@/lib/utils";
 import {
   checklistItems as mockChecklistItems,
   documents as mockDocuments,
@@ -318,6 +319,10 @@ function safeCityFromGroups(groups: GroupRecord[]) {
   return groups[0]?.departureCity ?? "Almaty";
 }
 
+function findMockOperatorBySlugOrId(operatorId: string) {
+  return mockOperators.find((operator) => operator.id === operatorId || slugify(operator.companyName) === operatorId);
+}
+
 function safeQuotaLeft(groups: GroupRecord[]) {
   return groups.reduce((sum, group) => sum + Math.max(group.quotaTotal - group.quotaFilled, 0), 0);
 }
@@ -371,7 +376,7 @@ function computeReadinessFromLocal(
 
 async function resolveCurrentPilgrimId() {
   if (!isSupabaseConfigured()) {
-    return "pl-aigerim";
+    return "pl-erlan";
   }
 
   const auth = await getAuthState();
@@ -460,35 +465,51 @@ export async function loadPublicOperatorCards() {
 
 export async function loadOperatorPublicProfile(operatorId: string) {
   if (!isSupabaseConfigured()) {
-    const operator = getMockOperatorById(operatorId);
+    const operator = findMockOperatorBySlugOrId(operatorId) ?? getMockOperatorById(operatorId);
     if (!operator) {
       return null;
     }
 
-    const groups = getMockOperatorGroups(operatorId);
+    const groups = getMockOperatorGroups(operator.id);
     return {
       operator,
-      city: getMockPrimaryCity(operatorId),
+      city: getMockPrimaryCity(operator.id),
       groups,
-      reviews: getMockOperatorReviews(operatorId),
+      reviews: getMockOperatorReviews(operator.id),
     };
   }
 
   try {
     const supabase = createClient();
-    const [{ data: operatorRow }, { data: groupRows }, { data: reviewRows }] = await Promise.all([
-      supabase.from("operators").select("*").eq("id", operatorId).maybeSingle(),
-      supabase.from("groups").select("*").eq("operator_id", operatorId).order("flight_date"),
-      supabase.from("operator_reviews").select("*").eq("operator_id", operatorId).eq("is_visible", true).order("created_at", {
-        ascending: false,
-      }),
-    ]);
+    let { data: operatorRow } = await supabase.from("operators").select("*").eq("id", operatorId).maybeSingle();
 
     if (!operatorRow) {
-      return null;
+      const { data: operatorRows } = await supabase.from("operators").select("*").eq("is_verified", true);
+      operatorRow = (operatorRows ?? []).find((row) => slugify((row as OperatorRow).company_name) === operatorId) ?? null;
+    }
+
+    if (!operatorRow) {
+      const fallbackOperator = findMockOperatorBySlugOrId(operatorId);
+
+      if (!fallbackOperator) {
+        return null;
+      }
+
+      return {
+        operator: fallbackOperator,
+        city: getMockPrimaryCity(fallbackOperator.id),
+        groups: getMockOperatorGroups(fallbackOperator.id),
+        reviews: getMockOperatorReviews(fallbackOperator.id),
+      };
     }
 
     const operator = mapOperator(operatorRow as OperatorRow);
+    const [{ data: groupRows }, { data: reviewRows }] = await Promise.all([
+      supabase.from("groups").select("*").eq("operator_id", operator.id).order("flight_date"),
+      supabase.from("operator_reviews").select("*").eq("operator_id", operator.id).eq("is_visible", true).order("created_at", {
+        ascending: false,
+      }),
+    ]);
     const groups = (groupRows ?? []).map((row) => mapGroup(row as GroupRow));
     const reviews = (reviewRows ?? []).map((row) => mapReview(row as ReviewRow));
 
@@ -499,7 +520,7 @@ export async function loadOperatorPublicProfile(operatorId: string) {
       reviews,
     };
   } catch {
-    const operator = getMockOperatorById(operatorId);
+    const operator = findMockOperatorBySlugOrId(operatorId) ?? getMockOperatorById(operatorId);
     if (!operator) {
       return null;
     }
@@ -523,7 +544,7 @@ export async function loadPublicVerification(qrCode: string) {
     const { data: paymentRow } = await supabase.from("payments").select("*").eq("qr_code", qrCode).maybeSingle();
 
     if (!paymentRow) {
-      return null;
+      return getMockPublicVerification(qrCode);
     }
 
     const payment = mapPayment(paymentRow as PaymentRow);
@@ -725,19 +746,22 @@ export async function loadCrmPilgrimDetail(pilgrimId: string) {
     return null;
   }
 
+  const resolvedPilgrimId =
+    crm.pilgrims.find((pilgrim) => pilgrim.id === pilgrimId || slugify(pilgrim.fullName) === pilgrimId)?.id ?? pilgrimId;
+
   if (!isSupabaseConfigured()) {
-    const pilgrim = getMockPilgrimById(pilgrimId);
+    const pilgrim = getMockPilgrimById(resolvedPilgrimId);
     if (!pilgrim) {
       return null;
     }
 
     return {
       pilgrim,
-      documents: getMockPilgrimDocuments(pilgrimId),
-      payment: getMockPilgrimPayment(pilgrimId),
-      group: getMockPilgrimGroup(pilgrimId),
-      readiness: getMockPilgrimReadiness(pilgrimId),
-      timeline: getMockPilgrimTimeline(pilgrimId),
+      documents: getMockPilgrimDocuments(resolvedPilgrimId),
+      payment: getMockPilgrimPayment(resolvedPilgrimId),
+      group: getMockPilgrimGroup(resolvedPilgrimId),
+      readiness: getMockPilgrimReadiness(resolvedPilgrimId),
+      timeline: getMockPilgrimTimeline(resolvedPilgrimId),
     };
   }
 
@@ -745,12 +769,12 @@ export async function loadCrmPilgrimDetail(pilgrimId: string) {
     const supabase = createClient();
     const [{ data: pilgrimRow }, { data: documentRows }, { data: paymentRows }, { data: linkRows }, { data: notificationRows }, { data: readinessRow }] =
       await Promise.all([
-        supabase.from("pilgrim_profiles").select("*").eq("id", pilgrimId).maybeSingle(),
-        supabase.from("documents").select("*").eq("pilgrim_id", pilgrimId).order("uploaded_at", { ascending: false }),
-        supabase.from("payments").select("*").eq("pilgrim_id", pilgrimId).order("created_at", { ascending: false }),
-        supabase.from("pilgrim_groups").select("*").eq("pilgrim_id", pilgrimId).limit(1),
-        supabase.from("notifications").select("*").eq("pilgrim_id", pilgrimId).order("scheduled_at", { ascending: false }).limit(5),
-        supabase.from("pilgrim_readiness_view").select("*").eq("pilgrim_id", pilgrimId).maybeSingle(),
+        supabase.from("pilgrim_profiles").select("*").eq("id", resolvedPilgrimId).maybeSingle(),
+        supabase.from("documents").select("*").eq("pilgrim_id", resolvedPilgrimId).order("uploaded_at", { ascending: false }),
+        supabase.from("payments").select("*").eq("pilgrim_id", resolvedPilgrimId).order("created_at", { ascending: false }),
+        supabase.from("pilgrim_groups").select("*").eq("pilgrim_id", resolvedPilgrimId).limit(1),
+        supabase.from("notifications").select("*").eq("pilgrim_id", resolvedPilgrimId).order("scheduled_at", { ascending: false }).limit(5),
+        supabase.from("pilgrim_readiness_view").select("*").eq("pilgrim_id", resolvedPilgrimId).maybeSingle(),
       ]);
 
     if (!pilgrimRow) {
@@ -771,7 +795,7 @@ export async function loadCrmPilgrimDetail(pilgrimId: string) {
     const notifications = (notificationRows ?? []).map((row) => mapNotification(row as NotificationRow));
     const readiness = readinessRow
       ? mapReadiness(readinessRow as ReadinessRow)
-      : computeReadinessFromLocal(pilgrimId, documents, payment, group);
+      : computeReadinessFromLocal(resolvedPilgrimId, documents, payment, group);
 
     return {
       pilgrim: mapPilgrim(pilgrimRow as PilgrimRow),
@@ -779,21 +803,21 @@ export async function loadCrmPilgrimDetail(pilgrimId: string) {
       payment,
       group,
       readiness,
-      timeline: defaultTimelineFromNotifications(notifications, pilgrimId),
+      timeline: defaultTimelineFromNotifications(notifications, resolvedPilgrimId),
     };
   } catch {
-    const pilgrim = getMockPilgrimById(pilgrimId);
+    const pilgrim = getMockPilgrimById(resolvedPilgrimId);
     if (!pilgrim) {
       return null;
     }
 
     return {
       pilgrim,
-      documents: getMockPilgrimDocuments(pilgrimId),
-      payment: getMockPilgrimPayment(pilgrimId),
-      group: getMockPilgrimGroup(pilgrimId),
-      readiness: getMockPilgrimReadiness(pilgrimId),
-      timeline: getMockPilgrimTimeline(pilgrimId),
+      documents: getMockPilgrimDocuments(resolvedPilgrimId),
+      payment: getMockPilgrimPayment(resolvedPilgrimId),
+      group: getMockPilgrimGroup(resolvedPilgrimId),
+      readiness: getMockPilgrimReadiness(resolvedPilgrimId),
+      timeline: getMockPilgrimTimeline(resolvedPilgrimId),
     };
   }
 }

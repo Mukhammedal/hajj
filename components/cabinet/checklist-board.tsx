@@ -1,77 +1,120 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Circle } from "lucide-react";
 
-import { Progress } from "@/components/ui/progress";
+import { DesignIcon } from "@/components/shell/design-icons";
+import { buildChecklistByCategory, getChecklistLabel } from "@/lib/design-cabinet";
 import { cn } from "@/lib/utils";
-import type { ChecklistItem, ChecklistCategory } from "@/types/domain";
+import type { ChecklistCategory, ChecklistItem } from "@/types/domain";
 
-const labels: Record<ChecklistCategory, string> = {
-  documents: "Документы",
-  health: "Здоровье",
-  clothing: "Одежда",
-  finance: "Финансы",
-  spiritual: "Духовная подготовка",
+const categoryIcons: Record<ChecklistCategory, { label: string; tone?: string }> = {
+  clothing: { label: "▣" },
+  documents: { label: "", tone: "default" },
+  finance: { label: "₸" },
+  health: { label: "+", tone: "danger" },
+  spiritual: { label: "◈", tone: "emerald" },
 };
 
 export function ChecklistBoard({ initialItems }: { initialItems: ChecklistItem[] }) {
   const [items, setItems] = useState(initialItems);
-  const completion = useMemo(() => {
-    if (!items.length) {
-      return 0;
-    }
+  const [openCategories, setOpenCategories] = useState<Record<ChecklistCategory, boolean>>({
+    clothing: false,
+    documents: true,
+    finance: false,
+    health: true,
+    spiritual: false,
+  });
 
-    return Math.round((items.filter((item) => item.isChecked).length / items.length) * 100);
-  }, [items]);
-
-  const grouped = Object.entries(labels).map(([category, label]) => ({
-    category,
-    label,
-    items: items.filter((item) => item.category === category),
-  }));
+  const grouped = useMemo(() => buildChecklistByCategory(items), [items]);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[0.72fr_1fr]">
-      <div className="shell-panel p-6">
-        <p className="text-2xl font-semibold">Общий прогресс</p>
-        <p className="mt-2 text-sm text-muted-foreground">Чек-лист помогает закрыть не только документы, но и подготовку к поездке.</p>
-        <div className="mt-6 flex h-32 w-32 items-center justify-center rounded-full border border-primary/20 bg-primary/10 font-display text-4xl text-primary">
-          {completion}%
-        </div>
-        <Progress className="mt-6" value={completion} />
-      </div>
+    <div className="cl-categories">
+      {grouped.map((group) => {
+        const completed = group.items.filter((item) => item.isChecked).length;
+        const total = group.items.length;
+        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+        const icon = categoryIcons[group.category];
 
-      <div className="grid gap-4">
-        {grouped.map((group) => (
-          <div key={group.category} className="shell-panel p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <p className="text-xl font-semibold">{group.label}</p>
-              <span className="text-sm text-muted-foreground">{group.items.filter((item) => item.isChecked).length}/{group.items.length}</span>
-            </div>
-            <div className="grid gap-3">
+        return (
+          <div key={group.category} className={cn("cl-cat", openCategories[group.category] && "open")}>
+            <button
+              type="button"
+              className="head w-full border-0 bg-transparent text-left"
+              onClick={() => setOpenCategories((prev) => ({ ...prev, [group.category]: !prev[group.category] }))}
+            >
+              <div
+                className="ic"
+                style={
+                  icon.tone === "danger"
+                    ? { background: "var(--danger-bg)", color: "var(--danger)" }
+                    : icon.tone === "emerald"
+                      ? { background: "rgba(30,74,53,.1)", color: "var(--emerald)" }
+                      : undefined
+                }
+              >
+                {group.category === "documents" ? <DesignIcon name="doc" size={16} /> : icon.label}
+              </div>
+              <h4>
+                {getChecklistLabel(group.category)} · <em>{group.category}</em>
+              </h4>
+              <div style={{ textAlign: "right" }}>
+                <div className="meta">
+                  {completed} из {total}
+                </div>
+                <div className={cn("mini-bar bar", group.category === "health" ? "warn" : "em")} style={{ marginTop: 6 }}>
+                  <i style={{ width: `${percent}%` }} />
+                </div>
+              </div>
+              <div className="chev">{openCategories[group.category] ? "свернуть ›" : "развернуть ›"}</div>
+            </button>
+
+            <div className="items">
               {group.items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() =>
-                    setItems((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, isChecked: !entry.isChecked } : entry)))
-                  }
-                  className={cn(
-                    "flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
-                    item.isChecked ? "border-success/25 bg-success/10" : "border-white/10 bg-white/5",
-                  )}
-                >
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full border border-white/15">
-                    {item.isChecked ? <Check className="h-4 w-4 text-success" /> : <Circle className="h-3 w-3 text-muted-foreground" />}
-                  </span>
-                  <span className="text-sm">{item.itemName}</span>
-                </button>
+                <div key={item.id} className="cl-item">
+                  <button
+                    type="button"
+                    className={cn("cb border-0", item.isChecked && "on")}
+                    onClick={() =>
+                      setItems((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, isChecked: !entry.isChecked } : entry)))
+                    }
+                  >
+                    {item.isChecked ? <DesignIcon name="check" size={11} /> : null}
+                  </button>
+                  <div>
+                    <div className="t">{item.itemName}</div>
+                    <div className="tip">{getChecklistHint(group.category, item.itemName)}</div>
+                  </div>
+                  <div className="more">подсказка</div>
+                </div>
               ))}
             </div>
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
+}
+
+function getChecklistHint(category: ChecklistCategory, itemName: string) {
+  const defaultHints: Record<ChecklistCategory, string> = {
+    clothing: "Удобная, дышащая одежда и обувь важнее объёма багажа.",
+    documents: "Держите оригинал и скан отдельно, чтобы не потерять доступ в дороге.",
+    finance: "Наличные SAR и одна резервная карта обычно перекрывают весь путь.",
+    health: "Куратор просит закрыть health-блок минимум за 10 дней до вылета.",
+    spiritual: "Короткий список дуа и заметок помогает не забыть главное в дни хаджа.",
+  };
+
+  if (/паспорт/i.test(itemName)) {
+    return "Проверьте срок действия и минимум две чистые страницы для визы.";
+  }
+
+  if (/ACWY|привив/i.test(itemName)) {
+    return "Сертификат с печатью Минздрава и английским переводом нужен до вылета.";
+  }
+
+  if (/ихрам/i.test(itemName)) {
+    return "Лучше примерить комплект заранее и сложить в ручную кладь.";
+  }
+
+  return defaultHints[category];
 }

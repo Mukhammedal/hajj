@@ -83,22 +83,26 @@ enum ChecklistCategory {
 }
 
 model Operator {
-  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId        String           @map("user_id") @db.Uuid
-  companyName   String           @map("company_name")
-  licenseNumber String           @unique @map("license_number")
-  licenseExpiry DateTime         @map("license_expiry") @db.Date
-  isVerified    Boolean          @default(false) @map("is_verified")
-  rating        Decimal          @default(0) @db.Decimal(2, 1)
-  totalReviews  Int              @default(0) @map("total_reviews")
-  phone         String?
-  address       String?
-  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+  companyName     String           @map("company_name")
+  licenseNumber   String           @unique @map("license_number")
+  licenseExpiry   DateTime         @map("license_expiry") @db.Date
+  isVerified      Boolean          @default(false) @map("is_verified")
+  rating          Decimal          @default(0) @db.Decimal(2, 1)
+  totalReviews    Int              @default(0) @map("total_reviews")
+  phone           String?
+  address         String?
+  googleSheetId   String?          @map("google_sheet_id")
+  lastSyncedAt    DateTime?        @map("last_synced_at") @db.Timestamptz(6)
+  autoSyncEnabled Boolean          @default(false) @map("auto_sync_enabled")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   pilgrimProfiles PilgrimProfile[]
-  groups        Group[]
-  payments      Payment[]
-  reviews       OperatorReview[]
-  notifications Notification[]
+  groups          Group[]
+  payments        Payment[]
+  reviews         OperatorReview[]
+  notifications   Notification[]
+  syncLogs        SyncLog[]
 
   @@index([userId])
   @@map("operators")
@@ -243,4 +247,20 @@ model ChecklistItem {
 
   @@index([pilgrimId])
   @@map("checklist_items")
+}
+
+model SyncLog {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  operatorId  String    @map("operator_id") @db.Uuid
+  sheetId     String    @map("sheet_id")
+  sheetName   String?   @map("sheet_name")
+  syncedAt    DateTime  @default(now()) @map("synced_at") @db.Timestamptz(6)
+  rowsCreated Int       @default(0) @map("rows_created")
+  rowsUpdated Int       @default(0) @map("rows_updated")
+  rowsSkipped Int       @default(0) @map("rows_skipped")
+  errors      Json      @default("[]")
+  operator    Operator  @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([operatorId])
+  @@map("sync_logs")
 }

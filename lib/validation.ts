@@ -1,8 +1,27 @@
 import { z } from "zod";
 
+const kzPhoneRegex = /^\+7\d{10}$/;
+const iinRegex = /^\d{12}$/;
+
 export const loginSchema = z.object({
   email: z.string().min(1, "Введите email").email("Некорректный email"),
   password: z.string().min(6, "Минимум 6 символов"),
+});
+
+export const registerSchema = z.object({
+  role: z.enum(["pilgrim", "operator"]),
+  firstName: z.string().min(2, "Введите имя"),
+  lastName: z.string().min(2, "Введите фамилию"),
+  email: z.string().min(1, "Введите email").email("Некорректный email"),
+  phone: z.string().regex(kzPhoneRegex, "Телефон должен быть в формате +7XXXXXXXXXX"),
+  iin: z.string().regex(iinRegex, "ИИН должен состоять из 12 цифр"),
+  password: z
+    .string()
+    .min(10, "Минимум 10 символов")
+    .regex(/\d/, "Добавьте хотя бы одну цифру"),
+  accepted: z.literal(true, {
+    errorMap: () => ({ message: "Нужно принять оферту и политику" }),
+  }),
 });
 
 export const groupSchema = z
@@ -31,8 +50,8 @@ export const reminderSchema = z.object({
 
 export const pilgrimCreateSchema = z.object({
   fullName: z.string().min(3, "Введите ФИО паломника"),
-  iin: z.string().regex(/^\d{12}$/, "ИИН должен состоять из 12 цифр"),
-  phone: z.string().min(6, "Укажите телефон"),
+  iin: z.string().regex(iinRegex, "ИИН должен состоять из 12 цифр"),
+  phone: z.string().regex(kzPhoneRegex, "Телефон должен быть в формате +7XXXXXXXXXX"),
   dateOfBirth: z.string().min(1, "Укажите дату рождения"),
   gender: z.enum(["male", "female"], { message: "Выберите пол" }),
   email: z.string().min(1, "Введите email для входа").email("Некорректный email"),
@@ -45,6 +64,7 @@ export const groupAssignmentSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+export type RegisterInput = z.input<typeof registerSchema>;
 export type GroupInput = z.infer<typeof groupSchema>;
 export type ReminderInput = z.infer<typeof reminderSchema>;
 export type PilgrimCreateInput = z.infer<typeof pilgrimCreateSchema>;

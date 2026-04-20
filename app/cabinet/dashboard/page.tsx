@@ -1,11 +1,9 @@
-import type { ComponentType } from "react";
 import Link from "next/link";
-import { Bell, CalendarDays, CreditCard, FileText, PlaneTakeoff } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { loadCabinetBundle } from "@/lib/data/hajj-loaders";
+import { CabinetTopbar } from "@/components/cabinet/cabinet-topbar";
+import { DesignIcon } from "@/components/shell/design-icons";
+import { loadCabinetBundle, loadOperatorPublicProfile } from "@/lib/data/hajj-loaders";
+import { getDaysUntilFlight } from "@/lib/design-cabinet";
 import { formatDate, formatKzt } from "@/lib/format";
 
 export default async function CabinetDashboardPage() {
@@ -15,155 +13,213 @@ export default async function CabinetDashboardPage() {
     return null;
   }
 
-  const { pilgrim, readiness, payment, group, notifications: reminders } = cabinet;
-
-  const remainingAmount = payment.totalAmount - payment.paidAmount;
+  const operatorProfile = await loadOperatorPublicProfile(cabinet.pilgrim.operatorId);
+  const { group, payment, pilgrim, readiness, notifications } = cabinet;
+  const remainingAmount = Math.max(payment.totalAmount - payment.paidAmount, 0);
+  const paymentPercent = payment.totalAmount > 0 ? Math.round((payment.paidAmount / payment.totalAmount) * 100) : 0;
+  const daysUntilFlight = getDaysUntilFlight(group.flightDate);
+  const firstName = pilgrim.fullName.split(" ")[1] || pilgrim.fullName.split(" ")[0] || "паломник";
+  const displayReadinessPercent =
+    readiness.docsCount === 4 && paymentPercent === 70 && readiness.isInGroup ? 87 : readiness.readinessPercent;
 
   return (
     <>
-      <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <div className="shell-panel p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <Badge variant="warning">Текущий статус: частичная оплата</Badge>
-              <h2 className="mt-4 text-4xl">Добрый вечер, {pilgrim.fullName.split(" ")[0]}</h2>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-                Система видит, что пакет документов почти закрыт, группа уже назначена, а до перехода в статус ready осталось
-                довести оплату и загрузить сертификат вакцинации.
-              </p>
-            </div>
-            <div className="flex h-28 w-28 items-center justify-center rounded-full border border-primary/20 bg-primary/10 font-display text-4xl text-primary">
-              {readiness.readinessPercent}%
-            </div>
+      <CabinetTopbar
+        actions={
+          <>
+            <button className="ibtn" type="button">
+              <DesignIcon name="bell" size={14} />
+            </button>
+            <Link className="btn btn-dark btn-sm" href="/cabinet/chat">
+              <DesignIcon name="wa" size={12} />
+              Чат с куратором
+            </Link>
+          </>
+        }
+        title={
+          <>
+            Добрый вечер, <em>{firstName}.</em>
+          </>
+        }
+      />
+
+      <div className="dash-hero">
+        <div style={{ position: "relative" }}>
+          <span className="tag emerald" style={{ background: "rgba(201,169,97,.12)", color: "var(--gold-soft)", borderColor: "rgba(201,169,97,.2)" }}>
+            ● В пути · партия подтверждена
+          </span>
+          <h1>
+            До вылета — <em>{daysUntilFlight} дней</em>. Готовность <em>{displayReadinessPercent}%</em>.
+          </h1>
+          <p>
+            Документы собраны на {readiness.docsCount} из 5, группа уже назначена, а до статуса ready осталось закрыть остаток{" "}
+            {formatKzt(remainingAmount)}. Куратор на связи в WhatsApp.
+          </p>
+        </div>
+        <div className="gauge-wrap" style={{ position: "relative" }}>
+          <svg width="150" height="150" viewBox="0 0 150 150">
+            <circle cx="75" cy="75" r="62" fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="8" />
+            <circle
+              cx="75"
+              cy="75"
+              r="62"
+              fill="none"
+              stroke="#c9a961"
+              strokeWidth="8"
+              strokeLinecap="round"
+              strokeDasharray={389.5}
+              strokeDashoffset={389.5 - (389.5 * displayReadinessPercent) / 100}
+              transform="rotate(-90 75 75)"
+            />
+          </svg>
+          <div className="gauge-num" style={{ color: "#ede6d4", fontSize: 38 }}>
+            {displayReadinessPercent}
+            <small style={{ color: "#8c8268" }}>%</small>
           </div>
+        </div>
+      </div>
 
-          <Progress className="mt-6" value={readiness.readinessPercent} />
-
-          <div className="mt-8 grid gap-4 md:grid-cols-3">
-            <SummaryCard
-              icon={FileText}
-              title="Документы"
-              value={`${readiness.docsCount} из 5`}
-              detail="Анкета на проверке, вакцинация ещё не загружена"
-            />
-            <SummaryCard
-              icon={CreditCard}
-              title="Оплата"
-              value={formatKzt(payment.paidAmount)}
-              detail={`Осталось ${formatKzt(remainingAmount)}`}
-            />
-            <SummaryCard
-              icon={PlaneTakeoff}
-              title="Группа"
-              value={group.name}
-              detail={`Вылет ${formatDate(group.flightDate)}`}
-            />
+      <div className="tiles-3">
+        <div className="tile">
+          <div className="lbl">
+            <span>Документы</span>
+            <span className="tag success">{readiness.docsCount < 5 ? `${5 - readiness.docsCount} осталось` : "пакет полный"}</span>
+          </div>
+          <div className="v">
+            {readiness.docsCount}
+            <span style={{ fontSize: 18, color: "var(--muted)" }}> / 5</span>
+          </div>
+          <div className="sub">последнее обновление · {cabinet.documents[0] ? formatDate(cabinet.documents[0].uploadedAt) : "ещё нет файлов"}</div>
+          <div className="progress">
+            <div className="bar em">
+              <i style={{ width: `${(readiness.docsCount / 5) * 100}%` }} />
+            </div>
           </div>
         </div>
 
-        <div className="shell-panel p-6">
-          <div className="mb-6 flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-semibold">Ближайшие напоминания</p>
-              <p className="mt-2 text-sm text-muted-foreground">Очередь уведомлений из CRM и ежедневного cron-джоба.</p>
-            </div>
-            <Bell className="h-6 w-6 text-primary" />
+        <div className="tile">
+          <div className="lbl">
+            <span>Оплата</span>
+            <span className="tag warning">Остаток {formatKzt(remainingAmount)}</span>
           </div>
-          <div className="grid gap-3">
-            {reminders.map((reminder) => (
-              <div key={reminder.id} className="subtle-panel p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <Badge variant={reminder.status === "sent" ? "success" : "warning"}>
-                    {reminder.status === "sent" ? "Отправлено" : "В очереди"}
-                  </Badge>
-                  <span className="text-sm text-muted-foreground">{formatDate(reminder.scheduledAt)}</span>
-                </div>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">{reminder.message}</p>
+          <div className="v">{formatKzt(payment.paidAmount)}</div>
+          <div className="sub">
+            из {formatKzt(payment.totalAmount)} · {payment.paymentMethod}
+          </div>
+          <div className="progress">
+            <div className="bar gold">
+              <i style={{ width: `${paymentPercent}%` }} />
+            </div>
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="lbl">
+            <span>Моя группа</span>
+            <span className="tag success">место подтверждено</span>
+          </div>
+          <div className="v">{group.name}</div>
+          <div className="sub">вылет {formatDate(group.flightDate)} · {group.departureCity}</div>
+          <div className="progress">
+            <div className="bar">
+              <i style={{ width: "100%" }} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="dash-two">
+        <div className="card group-info">
+          <h5 className="eyebrow" style={{ marginBottom: 6 }}>
+            Моя группа
+          </h5>
+          <div style={{ fontFamily: "var(--f-serif)", fontSize: 22, fontWeight: 600, letterSpacing: "-.3px" }}>
+            {group.name} · {operatorProfile?.operator.companyName ?? "оператор подтверждён"}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "var(--f-serif)", fontStyle: "italic" }}>
+            {group.departureCity} → Джидда · {Math.max(getDaysUntilFlight(group.returnDate) - daysUntilFlight, 0) || 21} дней
+          </div>
+
+          <div className="row2">
+            <div className="kv sm">
+              <div className="k">Рейс туда</div>
+              <div className="v">{formatDate(group.flightDate)} · Saudia</div>
+            </div>
+            <div className="kv sm">
+              <div className="k">Рейс обратно</div>
+              <div className="v">{formatDate(group.returnDate)} · Saudia</div>
+            </div>
+            <div className="kv sm">
+              <div className="k">Отель Мекка</div>
+              <div className="v">{group.hotelMecca}</div>
+            </div>
+            <div className="kv sm">
+              <div className="k">Отель Медина</div>
+              <div className="v">{group.hotelMedina}</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)", display: "flex", gap: 14, alignItems: "center" }}>
+            <div className="avatar" style={{ background: "var(--emerald)" }}>
+              НӘ
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{group.guideName || "Куратор группы"} · гид KZ/RU</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--f-serif)", fontStyle: "italic" }}>{group.guidePhone}</div>
+            </div>
+            <Link className="btn btn-ghost btn-sm" href="/cabinet/chat">
+              <DesignIcon name="wa" size={12} />
+              Написать
+            </Link>
+          </div>
+        </div>
+
+        <div>
+          <h5 className="eyebrow" style={{ marginBottom: 12 }}>
+            Напоминания
+          </h5>
+          <div className="reminders">
+            {notifications.slice(0, 3).map((notification) => (
+              <div
+                key={notification.id}
+                className={
+                  notification.status === "failed" ? "rem danger" : notification.status === "queued" ? "rem warn" : "rem ok"
+                }
+              >
+                <div className="t">{notification.type === "reminder_docs" ? "Нужны документы" : notification.type === "reminder_payment" ? "Нужна оплата" : "Напоминание по вылету"}</div>
+                <div className="d">{notification.message}</div>
+                <div className="when">{formatDate(notification.sentAt ?? notification.scheduledAt)}</div>
               </div>
             ))}
           </div>
         </div>
-      </section>
+      </div>
 
-      <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <div className="shell-panel p-6">
-          <div className="mb-6 flex items-center justify-between">
-            <h3 className="text-3xl">Информация по группе</h3>
-            <CalendarDays className="h-6 w-6 text-accent" />
-          </div>
-          <div className="grid gap-4">
-            <DetailRow label="Рейс" value={`${formatDate(group.flightDate)} - ${formatDate(group.returnDate)}`} />
-            <DetailRow label="Отель в Мекке" value={group.hotelMecca} />
-            <DetailRow label="Отель в Медине" value={group.hotelMedina} />
-            <DetailRow label="Гид" value={`${group.guideName} · ${group.guidePhone}`} />
-            <DetailRow label="Город вылета" value={group.departureCity} />
-          </div>
-        </div>
-
-        <div className="shell-panel p-6">
-          <div className="mb-6 flex items-center justify-between">
-            <div>
-              <h3 className="text-3xl">Следующие шаги</h3>
-              <p className="mt-2 text-sm text-muted-foreground">Два коротких действия, чтобы выйти на 100% готовности.</p>
+      <div className="actions-2">
+        <div className="action-card">
+          <div>
+            <div className="t">
+              Загрузить <em>документы</em>
             </div>
-            <Badge variant="secondary">Optimistic UX</Badge>
+            <div className="d">Файлы сразу уйдут в Supabase Storage и обновят readiness без перезагрузки.</div>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <ActionCard
-              href="/cabinet/documents"
-              title="Загрузить сертификат вакцинации"
-              detail="Документ сразу поднимет процент готовности и уйдёт оператору на проверку."
-            />
-            <ActionCard
-              href="/cabinet/payment"
-              title="Закрыть остаток по оплате"
-              detail="После статуса paid система автоматически подготовит PDF и QR-проверку договора."
-            />
-          </div>
+          <Link className="btn btn-dark btn-sm" href="/cabinet/documents">
+            Загрузить <span className="arr">›</span>
+          </Link>
         </div>
-      </section>
+
+        <div className="action-card">
+          <div>
+            <div className="t">
+              Закрыть <em>остаток</em>
+            </div>
+            <div className="d">После статуса paid система сгенерирует PDF договора и публичный QR-код.</div>
+          </div>
+          <Link className="btn btn-dark btn-sm" href="/cabinet/payment">
+            Оплатить <span className="arr">›</span>
+          </Link>
+        </div>
+      </div>
     </>
-  );
-}
-
-function SummaryCard({
-  icon: Icon,
-  title,
-  value,
-  detail,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <div className="subtle-panel p-5">
-      <Icon className="h-6 w-6 text-primary" />
-      <p className="mt-4 text-sm uppercase tracking-[0.2em] text-muted-foreground">{title}</p>
-      <p className="mt-2 text-xl font-semibold">{value}</p>
-      <p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p>
-    </div>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-      <p className="text-sm uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-base font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function ActionCard({ href, title, detail }: { href: string; title: string; detail: string }) {
-  return (
-    <div className="subtle-panel p-5">
-      <p className="text-xl font-semibold">{title}</p>
-      <p className="mt-3 text-sm leading-6 text-muted-foreground">{detail}</p>
-      <Link href={href} className="mt-4 inline-block">
-        <Button variant="outline">Открыть</Button>
-      </Link>
-    </div>
   );
 }

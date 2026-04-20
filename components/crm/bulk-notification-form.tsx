@@ -4,7 +4,8 @@ import type { ChangeEvent } from "react";
 import { useMemo, useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 
-import { initialActionState, sendBulkReminderAction } from "@/lib/actions/hajj-actions";
+import { initialActionState } from "@/lib/actions/action-state";
+import { sendBulkReminderAction } from "@/lib/actions/hajj-actions";
 import { reminderSchema, type ReminderInput } from "@/lib/validation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";

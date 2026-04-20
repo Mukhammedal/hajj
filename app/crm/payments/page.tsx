@@ -1,112 +1,196 @@
-import { Wallet } from "lucide-react";
+import Link from "next/link";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { CrmTopbar } from "@/components/crm/crm-topbar";
+import { buildMonthlyPaymentChart, getPaymentMethodLabel, getPaymentStatusMeta, getPilgrimRouteId } from "@/lib/design-crm";
 import { loadCrmBundle } from "@/lib/data/hajj-loaders";
 import { formatDate, formatKzt } from "@/lib/format";
 
-function monthLabel(date: string) {
-  return new Intl.DateTimeFormat("ru-RU", { month: "long" }).format(new Date(date));
+type SearchParams = Record<string, string | string[] | undefined>;
+type PaymentFilter = "all" | "cash" | "halyk" | "kaspi" | "transfer";
+
+function toValue(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
-export default async function CrmPaymentsPage() {
+export default async function CrmPaymentsPage({ searchParams }: { searchParams?: SearchParams }) {
   const crm = await loadCrmBundle();
-  const pilgrimMap = new Map((crm?.pilgrims ?? []).map((pilgrim) => [pilgrim.id, pilgrim]));
-  const payments = (crm?.payments ?? [])
-    .map((payment) => {
-      const pilgrim = pilgrimMap.get(payment.pilgrimId);
-      return pilgrim ? { pilgrim, payment } : null;
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
-  const monthlyRevenue = Array.from(
-    (crm?.payments ?? []).reduce((accumulator, payment) => {
-      const key = payment.createdAt.slice(0, 7);
-      const current = accumulator.get(key) ?? { month: monthLabel(payment.createdAt), value: 0 };
-      current.value += payment.paidAmount;
-      accumulator.set(key, current);
-      return accumulator;
-    }, new Map<string, { month: string; value: number }>()),
-  )
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([, value]) => value);
+  if (!crm) {
+    return null;
+  }
 
-  const chartData = monthlyRevenue.length ? monthlyRevenue : [{ month: "Нет данных", value: 0 }];
-  const maxRevenue = Math.max(1, ...chartData.map((entry) => entry.value));
+  const pilgrimMap = new Map(crm.pilgrims.map((item) => [item.id, item]));
+  const groupMap = new Map(crm.groups.map((item) => [item.id, item]));
+  const method = ((toValue(searchParams?.method) as PaymentFilter | undefined) ?? "all");
+  const q = (toValue(searchParams?.q) ?? "").trim().toLowerCase();
+  const chartData = buildMonthlyPaymentChart(crm.payments);
+  const filteredPayments = crm.payments.filter((payment) => {
+    const pilgrim = pilgrimMap.get(payment.pilgrimId);
+    const groupId = crm.groupLinks.find((link) => link.pilgrimId === payment.pilgrimId)?.groupId;
+    const group = groupMap.get(groupId ?? "");
+    const matchesMethod = method === "all" || payment.paymentMethod === method;
+    const matchesQuery =
+      !q ||
+      pilgrim?.fullName.toLowerCase().includes(q) ||
+      pilgrim?.iin.includes(q.replace(/\D/g, "")) ||
+      group?.name.toLowerCase().includes(q);
+
+    return matchesMethod && Boolean(matchesQuery);
+  });
+
+  const totalAmount = crm.payments.reduce((sum, item) => sum + item.totalAmount, 0);
+  const collectedAmount = crm.payments.reduce((sum, item) => sum + item.paidAmount, 0);
+  const currentMonthAmount = crm.payments
+    .filter((item) => item.createdAt.startsWith("2026-04"))
+    .reduce((sum, item) => sum + item.paidAmount, 0);
+  const avgCheck = crm.payments.length ? totalAmount / crm.payments.length : 0;
+
+  const buildHref = (nextMethod: PaymentFilter) => {
+    const params = new URLSearchParams();
+    if (q) {
+      params.set("q", q);
+    }
+    if (nextMethod !== "all") {
+      params.set("method", nextMethod);
+    }
+    return params.size ? `/crm/payments?${params.toString()}` : "/crm/payments";
+  };
 
   return (
-    <div className="grid gap-6">
-      <section className="shell-panel p-6">
-        <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+    <>
+      <CrmTopbar
+        title={
+          <>
+            Платежи и <em>выручка.</em>
+          </>
+        }
+        actions={
+          <>
+            <input
+              aria-label="Поиск по платежам"
+              className="search-box"
+              defaultValue={q}
+              form="crm-payments-filter"
+              name="q"
+              placeholder="ФИО, ИИН, группа…"
+              style={{ width: 220 }}
+              type="search"
+            />
+            {method !== "all" ? <input form="crm-payments-filter" name="method" type="hidden" value={method} /> : null}
+            <form action="/crm/payments" id="crm-payments-filter" method="get" />
+            <Link className="btn btn-ghost btn-sm" href="/crm/contracts">
+              Договоры и QR
+            </Link>
+          </>
+        }
+      />
+
+      <div className="pay-summary-4">
+        <div className="m">
+          <div className="k">Выручка сезон</div>
+          <div className="v">{formatKzt(collectedAmount)}</div>
+        </div>
+        <div className="m">
+          <div className="k">Pending</div>
+          <div className="v">{formatKzt(Math.max(totalAmount - collectedAmount, 0))}</div>
+        </div>
+        <div className="m">
+          <div className="k">Этот месяц</div>
+          <div className="v">{formatKzt(currentMonthAmount)}</div>
+        </div>
+        <div className="m">
+          <div className="k">Средний чек</div>
+          <div className="v">{formatKzt(avgCheck)}</div>
+        </div>
+      </div>
+
+      <div className="crm-filter" style={{ marginBottom: 24 }}>
+        {([
+          ["all", "Все"],
+          ["kaspi", "Kaspi"],
+          ["halyk", "Halyk"],
+          ["cash", "Наличные"],
+          ["transfer", "Перевод"],
+        ] as const).map(([key, label]) => (
+          <Link className={`chip ${method === key ? "on" : ""}`} href={buildHref(key)} key={key}>
+            {label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="chart-card">
+        <div className="chart-head">
           <div>
-            <Badge>Платёжный контур v1</Badge>
-            <h2 className="mt-4 text-4xl">Оплаты и выручка</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
-              Реальный эквайринг не входит в v1, но таблица и вебхук-заглушка уже готовы для Kaspi/Halyk интеграции.
-            </p>
-          </div>
-          <Button variant="outline">Статус: все</Button>
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-        <div className="shell-panel p-6">
-          <div className="mb-6 flex items-center justify-between">
-            <h3 className="text-3xl">Выручка по месяцам</h3>
-            <Wallet className="h-6 w-6 text-primary" />
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            {chartData.map((entry) => (
-              <div key={entry.month} className="flex flex-col justify-end rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
-                <div
-                  className="rounded-2xl bg-gradient-to-t from-secondary via-primary to-accent"
-                  style={{ height: `${Math.max(20, (entry.value / maxRevenue) * 180)}px` }}
-                />
-                <p className="mt-4 text-sm text-muted-foreground">{entry.month}</p>
-                <p className="mt-2 text-lg font-semibold">{formatKzt(entry.value)}</p>
-              </div>
-            ))}
+            <h4>
+              Выручка <em>по месяцам</em>
+            </h4>
+            <div className="s">Основная оплата и частичные взносы</div>
           </div>
         </div>
+        <div className="chart-bars">
+          {chartData.map((entry) => (
+            <div key={`${entry.label}-full`} className="b" style={{ height: `${entry.darkHeight}%` }} />
+          ))}
+          {chartData.map((entry) => (
+            <div key={`${entry.label}-part`} className="b em" style={{ height: `${entry.emeraldHeight}%` }} />
+          ))}
+        </div>
+        <div className="chart-labels">
+          {chartData.map((entry) => (
+            <div key={entry.label}>{entry.label}</div>
+          ))}
+        </div>
+      </div>
 
-        <div className="shell-panel overflow-hidden p-0">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left">
-              <thead className="border-b border-white/10 bg-white/5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                <tr>
-                  <th className="px-5 py-4">Паломник</th>
-                  <th className="px-5 py-4">Сумма</th>
-                  <th className="px-5 py-4">Оплачено</th>
-                  <th className="px-5 py-4">Статус</th>
-                  <th className="px-5 py-4">Создано</th>
+      <div className="rep-hist">
+        <table>
+          <thead>
+            <tr>
+              <th>Дата-время</th>
+              <th>Паломник</th>
+              <th>Группа</th>
+              <th>Сумма</th>
+              <th>Метод</th>
+              <th>Статус</th>
+              <th>PDF договора</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredPayments.slice(0, 8).map((payment) => {
+              const pilgrim = pilgrimMap.get(payment.pilgrimId);
+              const groupId = crm.groupLinks.find((link) => link.pilgrimId === payment.pilgrimId)?.groupId;
+              const group = groupMap.get(groupId ?? "");
+              const meta = getPaymentStatusMeta(payment.status);
+
+              return (
+                <tr key={payment.id}>
+                  <td>{new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(payment.createdAt))}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    <Link href={`/crm/pilgrims/${getPilgrimRouteId(pilgrim ?? { fullName: payment.pilgrimId, id: payment.pilgrimId })}`}>{pilgrim?.fullName ?? "Паломник"}</Link>
+                  </td>
+                  <td>{group?.name ?? "Без группы"}</td>
+                  <td>{formatKzt(payment.paidAmount)}</td>
+                  <td>
+                    <span className="tag">{getPaymentMethodLabel(payment.paymentMethod)}</span>
+                  </td>
+                  <td>
+                    <span className={`tag ${meta.tone}`}>{meta.label}</span>
+                  </td>
+                  <td>
+                    {payment.contractUrl ? (
+                      <Link href={payment.contractUrl} style={{ color: "var(--emerald)", fontSize: 12, fontWeight: 600 }}>
+                        Скачать PDF
+                      </Link>
+                    ) : (
+                      <span className="tag">черновик</span>
+                    )}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {payments.map(({ pilgrim, payment }) => (
-                  <tr key={payment.id} className="border-b border-white/8 last:border-b-0">
-                    <td className="px-5 py-4">{pilgrim.fullName}</td>
-                    <td className="px-5 py-4">{formatKzt(payment.totalAmount)}</td>
-                    <td className="px-5 py-4">{formatKzt(payment.paidAmount)}</td>
-                    <td className="px-5 py-4">
-                      <Badge variant={payment.status === "paid" ? "success" : payment.status === "partial" ? "warning" : "muted"}>
-                        {payment.status}
-                      </Badge>
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="space-y-2">
-                        <p>{formatDate(payment.createdAt)}</p>
-                        <Badge variant={payment.contractUrl ? "success" : "muted"}>
-                          {payment.contractUrl ? "Договор готов" : "Договор не создан"}
-                        </Badge>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-    </div>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

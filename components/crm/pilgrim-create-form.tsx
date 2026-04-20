@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 
-import { initialActionState, createPilgrimAction } from "@/lib/actions/hajj-actions";
+import { initialActionState } from "@/lib/actions/action-state";
+import { createPilgrimAction } from "@/lib/actions/hajj-actions";
 import { pilgrimCreateSchema, type PilgrimCreateInput } from "@/lib/validation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,7 +54,7 @@ export function PilgrimCreateForm() {
             name="phone"
             value={values.phone}
             onChange={(event) => setValues((prev) => ({ ...prev, phone: event.target.value }))}
-            placeholder="+7 700 123 45 67"
+            placeholder="+77001234567"
             required
           />
         </FormField>
