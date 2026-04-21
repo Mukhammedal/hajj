@@ -3,9 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { initialActionState, type ActionState } from "@/lib/actions/action-state";
+import type { ActionState } from "@/lib/actions/action-state";
+import { logAudit } from "@/lib/audit/log";
 import { generateContractForPayment } from "@/lib/contracts";
 import { isSupabaseConfigured } from "@/lib/env";
+import { dbErrorToActionState } from "@/lib/errors/db-error-mapper";
+import {
+  dispatchNotifications,
+  type NotificationChannel,
+  type NotificationType,
+} from "@/lib/notifications/dispatch";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -14,7 +21,6 @@ import {
   pilgrimCreateSchema,
   reminderSchema,
 } from "@/lib/validation";
-import { isWhapiConfigured, normalizeWhatsAppRecipient, sendWhapiTextMessage } from "@/lib/whatsapp";
 
 const ruDateFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "numeric",
@@ -52,6 +58,13 @@ function revalidateCrmCore(pilgrimIds: string[] = []) {
   });
 }
 
+function revalidateGroupSeatViews() {
+  revalidatePath("/crm/groups");
+  revalidatePath("/crm/dashboard");
+  revalidatePath("/cabinet/group");
+  revalidatePath("/cabinet/dashboard");
+}
+
 async function resolveCurrentOperator(supabase: ReturnType<typeof createClient>) {
   const {
     data: { user },
@@ -61,122 +74,25 @@ async function resolveCurrentOperator(supabase: ReturnType<typeof createClient>)
     return { error: "Сессия не найдена. Войдите заново.", operator: null, user: null };
   }
 
-  const { data: operator, error: operatorError } = await supabase
-    .from("operators")
-    .select("id")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const [{ data: operator }, { data: teamMember, error: teamError }] = await Promise.all([
+    supabase.from("operators").select("id").eq("user_id", user.id).limit(1).maybeSingle(),
+    supabase
+      .from("operator_team_members")
+      .select("operator_id")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  if (operatorError || !operator) {
+  if (!operator && !teamMember) {
     return { error: "Оператор не найден для текущего пользователя.", operator: null, user };
   }
 
-  return { error: null, operator, user };
-}
-
-async function dispatchNotifications({
-  channel,
-  message,
-  operatorId,
-  pilgrims,
-  supabase,
-  type,
-}: {
-  channel: "whatsapp" | "sms";
-  message: string;
-  operatorId: string;
-  pilgrims: Array<{ id: string; phone: string | null }>;
-  supabase: ReturnType<typeof createClient>;
-  type: "reminder_docs" | "reminder_payment" | "reminder_flight" | "welcome" | "checklist";
-}) {
-  const whapiEnabled = channel === "whatsapp" && isWhapiConfigured();
-  let sentCount = 0;
-  let failedCount = 0;
-  let queuedCount = 0;
-
-  const payload = await Promise.all(
-    pilgrims.map(async (pilgrim) => {
-      const scheduledAt = new Date().toISOString();
-      let status: "queued" | "sent" | "failed" = "queued";
-      let sentAt: string | null = null;
-
-      if (channel === "whatsapp" && whapiEnabled) {
-        const recipient = normalizeWhatsAppRecipient(pilgrim.phone ?? "");
-
-        if (!recipient) {
-          status = "failed";
-          failedCount += 1;
-        } else {
-          try {
-            await sendWhapiTextMessage({
-              to: recipient,
-              body: message,
-            });
-            status = "sent";
-            sentAt = new Date().toISOString();
-            sentCount += 1;
-          } catch {
-            status = "failed";
-            failedCount += 1;
-          }
-        }
-      } else {
-        queuedCount += 1;
-      }
-
-      return {
-        pilgrim_id: pilgrim.id,
-        operator_id: operatorId,
-        channel,
-        type,
-        message,
-        status,
-        scheduled_at: scheduledAt,
-        sent_at: sentAt,
-      };
-    }),
-  );
-
-  const { error } = await supabase.from("notifications").insert(payload);
-
   return {
-    error,
-    failedCount,
-    queuedCount,
-    sentCount,
-    totalCount: pilgrims.length,
-    whapiEnabled,
-  };
-}
-
-function formatDispatchMessage({
-  channel,
-  failedCount,
-  queuedCount,
-  sentCount,
-  totalCount,
-  whapiEnabled,
-}: {
-  channel: "whatsapp" | "sms";
-  failedCount: number;
-  queuedCount: number;
-  sentCount: number;
-  totalCount: number;
-  whapiEnabled: boolean;
-}) {
-  if (channel === "whatsapp" && whapiEnabled) {
-    return {
-      status: failedCount ? ("error" as const) : ("success" as const),
-      message: `WhatsApp: отправлено ${sentCount}, ошибок ${failedCount}, в очереди ${queuedCount}.`,
-    };
-  }
-
-  return {
-    status: "success" as const,
-    message:
-      channel === "whatsapp"
-        ? `${totalCount} уведомлений записано. Для реальной отправки задайте WHATSAPP_API_KEY.`
-        : `${totalCount} уведомлений поставлено в очередь.`,
+    error: teamError?.message ?? null,
+    operator: operator ?? ({ id: (teamMember as { operator_id: string }).operator_id } as { id: string }),
+    user,
   };
 }
 
@@ -228,6 +144,7 @@ export async function createGroupAction(_: ActionState, formData: FormData): Pro
     guide_name: parsed.data.guideName,
     guide_phone: parsed.data.guidePhone,
     departure_city: parsed.data.departureCity,
+    seat_map_released: false,
     status: "forming",
   });
 
@@ -245,6 +162,77 @@ export async function createGroupAction(_: ActionState, formData: FormData): Pro
   return {
     status: "success",
     message: `Группа «${parsed.data.name}» создана.`,
+    fieldErrors: {},
+  };
+}
+
+export async function toggleGroupSeatMapAction(
+  groupId: string,
+  nextState: boolean,
+  _: ActionState,
+  _formData: FormData,
+): Promise<ActionState> {
+  z.string().min(1).parse(groupId);
+
+  if (!isSupabaseConfigured()) {
+    revalidateGroupSeatViews();
+    return {
+      status: "success",
+      message: nextState
+        ? "Демо-режим: места в самолёте открыты для паломников."
+        : "Демо-режим: показ мест в самолёте выключен.",
+      fieldErrors: {},
+    };
+  }
+
+  const supabase = createClient();
+  const { operator, error: operatorMessage } = await resolveCurrentOperator(supabase);
+
+  if (!operator) {
+    return {
+      status: "error",
+      message: operatorMessage ?? "Оператор не найден.",
+      fieldErrors: {},
+    };
+  }
+
+  const { data: group, error: groupError } = await supabase
+    .from("groups")
+    .select("id, name")
+    .eq("id", groupId)
+    .eq("operator_id", operator.id)
+    .limit(1)
+    .maybeSingle();
+
+  if (groupError || !group) {
+    return {
+      status: "error",
+      message: groupError?.message ?? "Группа не найдена.",
+      fieldErrors: {},
+    };
+  }
+
+  const { error: updateError } = await supabase
+    .from("groups")
+    .update({ seat_map_released: nextState })
+    .eq("id", group.id)
+    .eq("operator_id", operator.id);
+
+  if (updateError) {
+    return {
+      status: "error",
+      message: updateError.message,
+      fieldErrors: {},
+    };
+  }
+
+  revalidateGroupSeatViews();
+
+  return {
+    status: "success",
+    message: nextState
+      ? `Группа «${group.name}»: места в самолёте разрешены к показу.`
+      : `Группа «${group.name}»: показ мест в самолёте выключен.`,
     fieldErrors: {},
   };
 }
@@ -320,6 +308,7 @@ export async function createPilgrimAction(_: ActionState, formData: FormData): P
       status: "new",
     })
     .select("id")
+    .limit(1)
     .maybeSingle();
 
   if (profileError || !profile) {
@@ -399,8 +388,19 @@ export async function assignPilgrimsToGroupAction(_: ActionState, formData: Form
   }
 
   const [{ data: group }, { data: pilgrims }] = await Promise.all([
-    supabase.from("groups").select("id, quota_total, quota_filled, name").eq("id", parsed.data.groupId).eq("operator_id", operator.id).maybeSingle(),
-    supabase.from("pilgrim_profiles").select("id").in("id", parsed.data.pilgrimIds).eq("operator_id", operator.id),
+    supabase
+      .from("groups")
+      .select("id, quota_total, quota_filled, name")
+      .eq("id", parsed.data.groupId)
+      .eq("operator_id", operator.id)
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("pilgrim_profiles")
+      .select("id")
+      .in("id", parsed.data.pilgrimIds)
+      .eq("operator_id", operator.id)
+      .limit(Math.max(parsed.data.pilgrimIds.length, 1)),
   ]);
 
   if (!group) {
@@ -421,7 +421,12 @@ export async function assignPilgrimsToGroupAction(_: ActionState, formData: Form
     };
   }
 
-  const { data: existingLinks } = await supabase.from("pilgrim_groups").select("pilgrim_id").eq("group_id", group.id);
+  const { data: existingLinks } = await supabase
+    .from("pilgrim_groups")
+    .select("pilgrim_id")
+    .eq("group_id", group.id)
+    .in("pilgrim_id", resolvedPilgrimIds)
+    .limit(Math.max(resolvedPilgrimIds.length, 1));
   const alreadyInTarget = new Set((existingLinks ?? []).map((item) => item.pilgrim_id));
   const newAssignments = resolvedPilgrimIds.filter((pilgrimId) => !alreadyInTarget.has(pilgrimId));
   const availableQuota = Math.max(group.quota_total - group.quota_filled, 0);
@@ -483,65 +488,104 @@ export async function sendBulkReminderAction(_: ActionState, formData: FormData)
   }
 
   const supabase = createClient();
-  const { operator, error: operatorMessage } = await resolveCurrentOperator(supabase);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { status: "error", message: "Сессия не найдена.", fieldErrors: {} };
+  }
+
+  const { data: operator } = await supabase
+    .from("operators")
+    .select("id")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
   if (!operator) {
     return {
       status: "error",
-      message: operatorMessage ?? "Оператор не найден.",
+      message: "Оператор не найден для текущего пользователя.",
       fieldErrors: {},
     };
   }
 
   const { data: pilgrimRows, error: pilgrimError } = await supabase
     .from("pilgrim_profiles")
-    .select("id, full_name, phone")
+    .select("id, phone")
     .in("id", parsed.data.pilgrimIds)
-    .eq("operator_id", operator.id);
+    .eq("operator_id", operator.id)
+    .is("deleted_at", null);
 
   if (pilgrimError) {
+    return dbErrorToActionState(pilgrimError);
+  }
+
+  if (!pilgrimRows || pilgrimRows.length === 0) {
     return {
       status: "error",
-      message: pilgrimError.message,
+      message: "Не найдено ни одного паломника по переданным id.",
       fieldErrors: {},
     };
   }
 
-  const dispatch = await dispatchNotifications({
+  if (pilgrimRows.length > 200) {
+    return {
+      status: "error",
+      message: "За одну операцию можно отправить не более 200 уведомлений.",
+      fieldErrors: {},
+    };
+  }
+
+  const result = await dispatchNotifications({
     supabase,
     operatorId: operator.id,
-    pilgrims: (pilgrimRows ?? []).map((pilgrim) => ({
+    pilgrims: pilgrimRows.map((pilgrim) => ({
       id: pilgrim.id,
       phone: pilgrim.phone,
     })),
-    channel: parsed.data.channel,
-    type: parsed.data.type,
+    channel: parsed.data.channel as NotificationChannel,
+    type: parsed.data.type as NotificationType,
     message: parsed.data.message,
+    idempotencyWindow: "hour",
   });
 
-  if (dispatch.error) {
-    return {
-      status: "error",
-      message: dispatch.error.message,
-      fieldErrors: {},
-    };
-  }
+  await logAudit(supabase, {
+    actorUserId: user.id,
+    actorType: "user",
+    action: "notifications.bulk_send",
+    entityType: "operator",
+    entityId: operator.id,
+    diff: {
+      channel: parsed.data.channel,
+      type: parsed.data.type,
+      total: result.totalCount,
+      sent: result.sentCount,
+      failed: result.failedCount,
+      skipped: result.skippedCount,
+    },
+  });
 
   revalidatePath("/crm/notifications");
   revalidatePath("/crm/dashboard");
 
-  const result = formatDispatchMessage({
-    channel: parsed.data.channel,
-    failedCount: dispatch.failedCount,
-    queuedCount: dispatch.queuedCount,
-    sentCount: dispatch.sentCount,
-    totalCount: dispatch.totalCount,
-    whapiEnabled: dispatch.whapiEnabled,
-  });
+  if (result.error) {
+    return { status: "error", message: result.error.message, fieldErrors: {} };
+  }
+
+  const parts: string[] = [];
+  if (result.sentCount) parts.push(`отправлено ${result.sentCount}`);
+  if (result.failedCount) parts.push(`ошибок ${result.failedCount}`);
+  if (result.skippedCount) parts.push(`пропущено (дубли) ${result.skippedCount}`);
+  if (result.queuedCount) parts.push(`в очереди ${result.queuedCount}`);
+
+  const summary = parts.length ? parts.join(", ") : "нет изменений";
 
   return {
-    status: result.status,
-    message: result.message,
+    status: result.failedCount > 0 ? "error" : "success",
+    message: result.whapiEnabled
+      ? `WhatsApp: ${summary}.`
+      : `${result.totalCount} уведомлений записано. Задайте WHATSAPP_API_KEY для реальной отправки.`,
     fieldErrors: {},
   };
 }
@@ -574,9 +618,10 @@ export async function sendFlightBroadcastAction(
 
   const { data: group, error: groupError } = await supabase
     .from("groups")
-    .select("id, name, flight_date, departure_city, guide_name, guide_phone")
+    .select("id, name, flight_date, departure_city, guide_name, guide_phone, quota_total")
     .eq("id", groupId)
     .eq("operator_id", operator.id)
+    .limit(1)
     .maybeSingle();
 
   if (groupError || !group) {
@@ -590,7 +635,8 @@ export async function sendFlightBroadcastAction(
   const { data: groupLinks, error: groupLinksError } = await supabase
     .from("pilgrim_groups")
     .select("pilgrim_id")
-    .eq("group_id", group.id);
+    .eq("group_id", group.id)
+    .limit(Math.max(group.quota_total ?? 1, 1));
 
   if (groupLinksError) {
     return {
@@ -614,7 +660,8 @@ export async function sendFlightBroadcastAction(
     .from("pilgrim_profiles")
     .select("id, phone")
     .in("id", pilgrimIds)
-    .eq("operator_id", operator.id);
+    .eq("operator_id", operator.id)
+    .limit(Math.max(pilgrimIds.length, 1));
 
   if (pilgrimError) {
     return {
@@ -645,6 +692,7 @@ export async function sendFlightBroadcastAction(
     channel: "whatsapp",
     type: "reminder_flight",
     message,
+    idempotencyWindow: "day",
   });
 
   if (dispatch.error) {
@@ -659,18 +707,18 @@ export async function sendFlightBroadcastAction(
   revalidatePath("/crm/notifications");
   revalidatePath("/crm/dashboard");
 
-  const result = formatDispatchMessage({
-    channel: "whatsapp",
-    failedCount: dispatch.failedCount,
-    queuedCount: dispatch.queuedCount,
-    sentCount: dispatch.sentCount,
-    totalCount: dispatch.totalCount,
-    whapiEnabled: dispatch.whapiEnabled,
-  });
+  const parts: string[] = [];
+  if (dispatch.sentCount) parts.push(`отправлено ${dispatch.sentCount}`);
+  if (dispatch.failedCount) parts.push(`ошибок ${dispatch.failedCount}`);
+  if (dispatch.skippedCount) parts.push(`пропущено ${dispatch.skippedCount}`);
+  if (dispatch.queuedCount) parts.push(`в очереди ${dispatch.queuedCount}`);
+  const summary = parts.join(", ") || "нет изменений";
 
   return {
-    status: result.status,
-    message: `Группа «${group.name}»: ${result.message}`,
+    status: dispatch.failedCount > 0 ? "error" : "success",
+    message: dispatch.whapiEnabled
+      ? `Группа «${group.name}»: ${summary}.`
+      : `Группа «${group.name}»: уведомления записаны. Задайте WHATSAPP_API_KEY для реальной отправки.`,
     fieldErrors: {},
   };
 }
@@ -695,10 +743,9 @@ export async function verifyOperatorAction(operatorId: string, nextState: boolea
 }
 
 export async function markPaymentPaidAction(paymentId: string): Promise<void> {
-  z.string().min(1).parse(paymentId);
+  z.string().uuid().parse(paymentId);
 
   if (!isSupabaseConfigured()) {
-    revalidatePaymentViews();
     return;
   }
 
@@ -713,7 +760,7 @@ export async function markPaymentPaidAction(paymentId: string): Promise<void> {
 
   const { data: paymentRow } = await supabase
     .from("payments")
-    .select("id, pilgrim_id, total_amount")
+    .select("id, pilgrim_id, operator_id, total_amount, paid_amount, status, operators!inner(user_id)")
     .eq("id", paymentId)
     .maybeSingle();
 
@@ -721,15 +768,58 @@ export async function markPaymentPaidAction(paymentId: string): Promise<void> {
     return;
   }
 
-  await supabase
-    .from("payments")
-    .update({
-      paid_amount: paymentRow.total_amount,
-      status: "paid",
-    })
-    .eq("id", paymentId);
+  // @ts-expect-error — supabase типы для inner-join'ов неудобные
+  const operatorUserId = paymentRow.operators?.user_id as string | undefined;
+  const isAdmin = (user.app_metadata?.role ?? "") === "admin";
 
-  await generateContractForPayment(supabase, paymentId);
+  if (!isAdmin && operatorUserId !== user.id) {
+    throw new Error("Нет прав на изменение этого платежа.");
+  }
+
+  const previousStatus = paymentRow.status;
+  const previousPaidAmount = Number(paymentRow.paid_amount);
+  const totalAmount = Number(paymentRow.total_amount);
+  const delta = totalAmount - previousPaidAmount;
+
+  if (delta > 0) {
+    const adminClient = createAdminClient();
+    const { error: txError } = await adminClient.from("payment_transactions").insert({
+      payment_id: paymentId,
+      amount: delta,
+      method: "transfer",
+      status: "completed",
+      note: "Ручная отметка 'оплачено полностью'",
+      created_by_user_id: user.id,
+    });
+
+    if (txError) {
+      throw new Error(txError.message);
+    }
+  } else {
+    await supabase
+      .from("payments")
+      .update({ paid_amount: totalAmount, status: "paid" })
+      .eq("id", paymentId);
+  }
+
+  await logAudit(supabase, {
+    actorUserId: user.id,
+    actorType: "user",
+    action: "payment.marked_paid_manual",
+    entityType: "payment",
+    entityId: paymentId,
+    diff: {
+      from: { status: previousStatus, paid_amount: previousPaidAmount },
+      to: { status: "paid", paid_amount: totalAmount },
+    },
+  });
+
+  try {
+    await generateContractForPayment(supabase, paymentId);
+  } catch (error) {
+    console.error("[payment] contract generation failed after manual mark", error);
+  }
+
   revalidatePaymentViews(paymentRow.pilgrim_id);
 }
 
@@ -746,6 +836,7 @@ export async function generateContractAction(paymentId: string): Promise<void> {
     .from("payments")
     .select("id, pilgrim_id")
     .eq("id", paymentId)
+    .limit(1)
     .maybeSingle();
 
   if (!paymentRow) {
@@ -755,5 +846,3 @@ export async function generateContractAction(paymentId: string): Promise<void> {
   await generateContractForPayment(supabase, paymentId);
   revalidatePaymentViews(paymentRow.pilgrim_id);
 }
-
-export { initialActionState };

@@ -11,13 +11,17 @@
     "prisma:generate": "prisma generate"
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "@prisma/client": "^5.14.0",
     "@supabase/ssr": "^0.5.1",
     "@supabase/supabase-js": "^2.49.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "googleapis": "^171.4.0",
     "lucide-react": "^0.391.0",
     "next": "^14.2.5",
+    "node-cron": "^4.2.1",
+    "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -2,8 +2,15 @@ import { createHash } from "node:crypto";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { buildContractPdf, type ContractData } from "@/lib/contracts/generate-pdf";
 import { isStorageObjectPath } from "@/lib/documents";
 import type { PaymentRecord } from "@/types/domain";
+
+/**
+ * Интеграционный слой поверх buildContractPdf.
+ * Достаёт всё нужное из БД, формирует ContractData, сохраняет PDF в Storage,
+ * апдейтит payments.contract_url + qr_code + contract_generated_at.
+ */
 
 type PaymentContractRow = {
   contract_generated_at: string | null;
@@ -20,6 +27,7 @@ type PaymentContractRow = {
 };
 
 type PilgrimContractRow = {
+  date_of_birth: string | null;
   full_name: string;
   id: string;
   iin: string;
@@ -27,146 +35,25 @@ type PilgrimContractRow = {
 };
 
 type OperatorContractRow = {
+  address: string | null;
+  bank_bic: string | null;
+  bank_bin: string | null;
+  bank_iik: string | null;
+  bank_kbe: string | null;
+  bank_name: string | null;
   company_name: string;
   id: string;
   license_number: string;
   phone: string | null;
 };
 
-const cyrillicToLatinMap: Record<string, string> = {
-  А: "A",
-  а: "a",
-  Ә: "A",
-  ә: "a",
-  Б: "B",
-  б: "b",
-  В: "V",
-  в: "v",
-  Г: "G",
-  г: "g",
-  Ғ: "G",
-  ғ: "g",
-  Д: "D",
-  д: "d",
-  Е: "E",
-  е: "e",
-  Ё: "E",
-  ё: "e",
-  Ж: "Zh",
-  ж: "zh",
-  З: "Z",
-  з: "z",
-  И: "I",
-  и: "i",
-  Й: "I",
-  й: "i",
-  К: "K",
-  к: "k",
-  Қ: "Q",
-  қ: "q",
-  Л: "L",
-  л: "l",
-  М: "M",
-  м: "m",
-  Н: "N",
-  н: "n",
-  Ң: "Ng",
-  ң: "ng",
-  О: "O",
-  о: "o",
-  Ө: "O",
-  ө: "o",
-  П: "P",
-  п: "p",
-  Р: "R",
-  р: "r",
-  С: "S",
-  с: "s",
-  Т: "T",
-  т: "t",
-  У: "U",
-  у: "u",
-  Ұ: "U",
-  ұ: "u",
-  Ү: "U",
-  ү: "u",
-  Ф: "F",
-  ф: "f",
-  Х: "Kh",
-  х: "kh",
-  Һ: "H",
-  һ: "h",
-  Ц: "Ts",
-  ц: "ts",
-  Ч: "Ch",
-  ч: "ch",
-  Ш: "Sh",
-  ш: "sh",
-  Щ: "Sch",
-  щ: "sch",
-  Ъ: "",
-  ъ: "",
-  Ы: "Y",
-  ы: "y",
-  І: "I",
-  і: "i",
-  Ь: "",
-  ь: "",
-  Э: "E",
-  э: "e",
-  Ю: "Yu",
-  ю: "yu",
-  Я: "Ya",
-  я: "ya",
+type GroupContractRow = {
+  departure_city: string;
+  flight_date: string;
+  hotel_mecca: string | null;
+  hotel_medina: string | null;
+  return_date: string;
 };
-
-function transliterateToAscii(input: string) {
-  return [...input].map((char) => cyrillicToLatinMap[char] ?? char).join("");
-}
-
-function pdfSafeText(input: string) {
-  return transliterateToAscii(input)
-    .replace(/\\/g, "\\\\")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/[^\x20-\x7E]/g, "?");
-}
-
-function buildSimplePdf(lines: string[]) {
-  const stream = [
-    "BT",
-    "/F1 18 Tf",
-    "50 780 Td",
-    ...lines.flatMap((line, index) => [index === 0 ? `(${pdfSafeText(line)}) Tj` : `0 -24 Td (${pdfSafeText(line)}) Tj`]),
-    "ET",
-  ].join("\n");
-
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-  ];
-
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-
-  objects.forEach((object, index) => {
-    offsets.push(pdf.length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  });
-
-  const startXref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n`;
-  pdf += "0000000000 65535 f \n";
-  offsets.slice(1).forEach((offset) => {
-    pdf += `${offset.toString().padStart(10, "0")} 00000 n \n`;
-  });
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF`;
-
-  return new TextEncoder().encode(pdf);
-}
 
 function buildContractHash(payment: PaymentContractRow) {
   const digest = createHash("sha256")
@@ -177,14 +64,8 @@ function buildContractHash(payment: PaymentContractRow) {
 }
 
 export function derivePaymentStatus(totalAmount: number, paidAmount: number): PaymentRecord["status"] {
-  if (paidAmount <= 0) {
-    return "pending";
-  }
-
-  if (paidAmount >= totalAmount) {
-    return "paid";
-  }
-
+  if (paidAmount <= 0) return "pending";
+  if (paidAmount >= totalAmount) return "paid";
   return "partial";
 }
 
@@ -193,12 +74,18 @@ export async function resolveSignedContractUrl(supabase: SupabaseClient, contrac
     return contractUrl;
   }
 
-  const { data, error } = await supabase.storage.from("documents").createSignedUrl(contractUrl, 60 * 60);
+  const { data, error } = await supabase.storage
+    .from("documents")
+    .createSignedUrl(contractUrl, 60 * 60);
   return error || !data?.signedUrl ? contractUrl : data.signedUrl;
 }
 
 export async function generateContractForPayment(supabase: SupabaseClient, paymentId: string) {
-  const { data: paymentRow, error: paymentError } = await supabase.from("payments").select("*").eq("id", paymentId).maybeSingle();
+  const { data: paymentRow, error: paymentError } = await supabase
+    .from("payments")
+    .select("*")
+    .eq("id", paymentId)
+    .maybeSingle();
 
   if (paymentError || !paymentRow) {
     throw new Error(paymentError?.message ?? "Платёж не найден.");
@@ -210,47 +97,99 @@ export async function generateContractForPayment(supabase: SupabaseClient, payme
     throw new Error("Договор можно генерировать только для полностью оплаченного платежа.");
   }
 
-  const [{ data: pilgrimRow, error: pilgrimError }, { data: operatorRow, error: operatorError }] = await Promise.all([
-    supabase.from("pilgrim_profiles").select("id, full_name, iin, phone").eq("id", payment.pilgrim_id).maybeSingle(),
-    supabase.from("operators").select("id, company_name, license_number, phone").eq("id", payment.operator_id).maybeSingle(),
+  const [{ data: pilgrimRow }, { data: operatorRow }] = await Promise.all([
+    supabase
+      .from("pilgrim_profiles")
+      .select("id, full_name, iin, phone, date_of_birth")
+      .eq("id", payment.pilgrim_id)
+      .maybeSingle(),
+    supabase
+      .from("operators")
+      .select(
+        "id, company_name, license_number, phone, address, bank_bin, bank_iik, bank_bic, bank_kbe, bank_name",
+      )
+      .eq("id", payment.operator_id)
+      .maybeSingle(),
   ]);
 
-  if (pilgrimError || !pilgrimRow) {
-    throw new Error(pilgrimError?.message ?? "Паломник для договора не найден.");
-  }
-
-  if (operatorError || !operatorRow) {
-    throw new Error(operatorError?.message ?? "Оператор для договора не найден.");
-  }
+  if (!pilgrimRow) throw new Error("Паломник для договора не найден.");
+  if (!operatorRow) throw new Error("Оператор для договора не найден.");
 
   const pilgrim = pilgrimRow as PilgrimContractRow;
   const operator = operatorRow as OperatorContractRow;
+
+  const { data: groupLink } = await supabase
+    .from("pilgrim_groups")
+    .select("group_id")
+    .eq("pilgrim_id", payment.pilgrim_id)
+    .order("joined_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let trip: ContractData["trip"] | undefined;
+  if (groupLink?.group_id) {
+    const { data: groupRow } = await supabase
+      .from("groups")
+      .select("flight_date, return_date, hotel_mecca, hotel_medina, departure_city")
+      .eq("id", groupLink.group_id)
+      .maybeSingle();
+
+    if (groupRow) {
+      const g = groupRow as GroupContractRow;
+      trip = {
+        flightDate: g.flight_date,
+        returnDate: g.return_date,
+        hotelMecca: g.hotel_mecca,
+        hotelMedina: g.hotel_medina,
+        departureCity: g.departure_city,
+      };
+    }
+  }
+
   const qrHash = payment.qr_code ?? buildContractHash(payment);
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://hajj-drab.vercel.app";
+  const verificationUrl = `${baseUrl}/verify/${qrHash}`;
   const filePath = `${payment.pilgrim_id}/contracts/${qrHash}.pdf`;
-  const pdfBytes = buildSimplePdf([
-    "HajjCRM Contract",
-    `Contract ID: ${payment.id}`,
-    `Operator: ${operator.company_name}`,
-    `License: ${operator.license_number}`,
-    `Pilgrim: ${pilgrim.full_name}`,
-    `IIN: ${pilgrim.iin}`,
-    `Phone: ${pilgrim.phone ?? "-"}`,
-    `Amount KZT: ${Number(payment.total_amount)}`,
-    `Paid KZT: ${Number(payment.paid_amount)}`,
-    `Method: ${payment.payment_method}`,
-    `Status: ${payment.status}`,
-    `QR: ${qrHash}`,
-    `Issued at: ${new Date().toISOString()}`,
-  ]);
+
+  const pdfBytes = await buildContractPdf({
+    contractId: payment.id.slice(0, 8).toUpperCase(),
+    qrCode: qrHash,
+    verificationUrl,
+    operator: {
+      companyName: operator.company_name,
+      licenseNumber: operator.license_number,
+      phone: operator.phone,
+      address: operator.address,
+      bankDetails: {
+        bin: operator.bank_bin ?? undefined,
+        iik: operator.bank_iik ?? undefined,
+        bic: operator.bank_bic ?? undefined,
+        kbe: operator.bank_kbe ?? undefined,
+        bankName: operator.bank_name ?? undefined,
+      },
+    },
+    pilgrim: {
+      fullName: pilgrim.full_name,
+      iin: pilgrim.iin,
+      phone: pilgrim.phone,
+      dateOfBirth: pilgrim.date_of_birth,
+    },
+    payment: {
+      totalAmount: Number(payment.total_amount),
+      paidAmount: Number(payment.paid_amount),
+      method: payment.payment_method,
+      status: payment.status,
+    },
+    trip,
+    issuedAt: new Date().toISOString(),
+  });
 
   const { error: uploadError } = await supabase.storage.from("documents").upload(filePath, pdfBytes, {
     contentType: "application/pdf",
     upsert: true,
   });
 
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
+  if (uploadError) throw new Error(uploadError.message);
 
   const contractGeneratedAt = new Date().toISOString();
   const { data: updatedPayment, error: updateError } = await supabase
@@ -277,7 +216,12 @@ export function buildInstallmentSchedule(payment: PaymentRecord) {
       {
         label: "Единый платёж",
         amount: payment.totalAmount,
-        status: payment.status === "paid" ? "paid" : payment.status === "partial" ? "partial" : "pending",
+        status:
+          payment.status === "paid"
+            ? "paid"
+            : payment.status === "partial"
+              ? "partial"
+              : "pending",
       },
     ] as const;
   }
@@ -293,7 +237,6 @@ export function buildInstallmentSchedule(payment: PaymentRecord) {
     dueDate.setMonth(dueDate.getMonth() + index);
 
     let status: "paid" | "partial" | "pending" = "pending";
-
     if (paidRemaining >= amount) {
       status = "paid";
       paidRemaining -= amount;
@@ -302,10 +245,6 @@ export function buildInstallmentSchedule(payment: PaymentRecord) {
       paidRemaining = 0;
     }
 
-    return {
-      label: dueDate,
-      amount,
-      status,
-    };
+    return { label: dueDate, amount, status };
   });
 }
