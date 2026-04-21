@@ -1,0 +1,110 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Smoke на проде каждый час — ловим регрессии деплоя, Vercel, Supabase
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: # ручной запуск из UI
+
+jobs:
+  e2e:
+    name: Playwright E2E (on push/PR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name != 'schedule'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Run Playwright tests
+        env:
+          # Где тестируем. Для PR — на preview-deployment Vercel.
+          E2E_BASE_URL: ${{ secrets.E2E_BASE_URL || 'http://localhost:3004' }}
+
+          # Тест-аккаунты
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+          E2E_OPERATOR_EMAIL: ${{ secrets.E2E_OPERATOR_EMAIL }}
+          E2E_OPERATOR_PASSWORD: ${{ secrets.E2E_OPERATOR_PASSWORD }}
+          E2E_PILGRIM_EMAIL: ${{ secrets.E2E_PILGRIM_EMAIL }}
+          E2E_PILGRIM_PASSWORD: ${{ secrets.E2E_PILGRIM_PASSWORD }}
+
+          # Webhook secret для security-тестов (после safety pack)
+          E2E_TEST_WEBHOOK_SECRET: ${{ secrets.E2E_TEST_WEBHOOK_SECRET }}
+          E2E_REAL_PAYMENT_ID: ${{ secrets.E2E_REAL_PAYMENT_ID }}
+
+          # Env для локального dev-сервера
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14
+
+      - name: Upload test results (traces)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results-${{ github.run_id }}
+          path: test-results/
+          retention-days: 7
+
+  smoke-prod:
+    name: Prod smoke (hourly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: Smoke on production
+        env:
+          E2E_BASE_URL: https://hajj-drab.vercel.app
+        run: npx playwright test smoke.spec.ts --project=desktop-chromium
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          echo "::error::Prod smoke failed on https://hajj-drab.vercel.app"
+          # TODO: подключить Slack/Telegram через webhook
+          # curl -X POST ${{ secrets.SLACK_WEBHOOK }} -d '{"text":"Prod smoke failed"}'
+
+      - name: Upload smoke report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 7

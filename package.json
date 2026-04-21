@@ -8,7 +8,13 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:smoke": "playwright test smoke.spec.ts",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:prod": "E2E_BASE_URL=https://hajj-drab.vercel.app playwright test smoke.spec.ts",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
@@ -29,6 +35,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^20.14.10",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.3",
